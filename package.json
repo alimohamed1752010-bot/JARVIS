@@ -1,0 +1,14 @@
+{
+  "name": "jarvis-discord-bot",
+  "version": "1.0.0",
+  "description": "A ProBot-inspired Discord bot named JARVIS.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy": "node src/deploy-commands.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.24.2",
+    "dotenv": "^17.2.1"
+  }
+}
