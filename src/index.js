@@ -2,13 +2,15 @@ require("dotenv").config();
 
 const fs = require("node:fs");
 const path = require("node:path");
+
 const {
   Client,
   Collection,
   GatewayIntentBits,
   Partials,
   Events,
-  EmbedBuilder
+  EmbedBuilder,
+  PermissionsBitField
 } = require("discord.js");
 
 const client = new Client({
@@ -18,15 +20,22 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
   ],
-  partials: [Partials.Channel, Partials.Message]
+  partials: [
+    Partials.Channel,
+    Partials.Message
+  ]
 });
 
 client.commands = new Collection();
 
 const commandsPath = path.join(__dirname, "commands");
+
 for (const file of fs.readdirSync(commandsPath).filter(f => f.endsWith(".js"))) {
   const command = require(path.join(commandsPath, file));
-  client.commands.set(command.data.name, command);
+
+  if (command.data && command.data.name) {
+    client.commands.set(command.data.name, command);
+  }
 }
 
 function getConfig(guildId) {
@@ -47,277 +56,492 @@ function getConfig(guildId) {
 
 function saveConfig(guildId, config) {
   const file = path.join(__dirname, "..", "data", `${guildId}.json`);
-  fs.writeFileSync(file, JSON.stringify(config, null, 2));
+
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+
+  fs.writeFileSync(
+    file,
+    JSON.stringify(config, null, 2)
+  );
 }
 
-client.once(Events.ClientReady, readyClient => {
-  console.log(`JARVIS online as ${readyClient.user.tag}`);
 
-  readyClient.user.setPresence({
-    activities: [{ name: "your server", type: 3 }],
+// ==========================================
+// BOT ONLINE
+// ==========================================
+
+client.once(Events.ClientReady, bot => {
+  console.log("=================================");
+  console.log(`JARVIS ONLINE: ${bot.user.tag}`);
+  console.log(`BOT ID: ${bot.user.id}`);
+  console.log("MESSAGE CONTENT SYSTEM: READY");
+  console.log("=================================");
+
+  bot.user.setPresence({
+    activities: [
+      {
+        name: "your server",
+        type: 3
+      }
+    ],
     status: "online"
   });
 });
 
-// ===============================
+
+// ==========================================
 // SLASH COMMANDS
-// ===============================
+// ==========================================
 
 client.on(Events.InteractionCreate, async interaction => {
+
   if (!interaction.isChatInputCommand()) return;
 
-  const command = client.commands.get(interaction.commandName);
+  const command = client.commands.get(
+    interaction.commandName
+  );
+
   if (!command) return;
 
   try {
-    await command.execute(interaction, { getConfig, saveConfig });
+
+    await command.execute(
+      interaction,
+      {
+        getConfig,
+        saveConfig
+      }
+    );
+
   } catch (error) {
-    console.error(error);
+
+    console.error("SLASH COMMAND ERROR:", error);
 
     const reply = {
-      content: "JARVIS encountered an error while executing that command.",
+      content:
+        "❌ JARVIS encountered an error while executing that command.",
       ephemeral: true
     };
 
-    if (interaction.replied || interaction.deferred) {
+    if (
+      interaction.replied ||
+      interaction.deferred
+    ) {
+
       await interaction.followUp(reply);
+
     } else {
+
       await interaction.reply(reply);
+
     }
   }
 });
 
-// ===============================
-// JARVIS TEXT COMMANDS
-// ===============================
+
+// ==========================================
+// TEXT COMMAND SYSTEM
+// ==========================================
 
 client.on(Events.MessageCreate, async message => {
-  if (message.author.bot || !message.guild) return;
+
+  // LOG EVERY MESSAGE JARVIS RECEIVES
+  console.log(
+    `[MESSAGE] ${message.author.tag}: ${message.content}`
+  );
+
+  // Ignore bots
+  if (message.author.bot) return;
+
+  // Ignore DMs
+  if (!message.guild) return;
 
   const content = message.content.trim();
 
-  // Commands must start with "jarvis"
-  if (!/^jarvis(?:\s|$)/i.test(content)) return;
-
-  const input = content.replace(/^jarvis\s*/i, "").trim();
-
-  // Just saying "jarvis"
-  if (!input) {
-    return message.reply("Yes, sir? 🤖");
+  // Must start with "jarvis"
+  if (!content.toLowerCase().startsWith("jarvis")) {
+    return;
   }
 
-  const args = input.split(/\s+/);
-  const commandName = args.shift().toLowerCase();
+  console.log(
+    `[JARVIS COMMAND] ${message.author.tag}: ${content}`
+  );
 
-  // ===============================
+  // Remove "jarvis"
+  const input = content
+    .slice(6)
+    .trim();
+
+  // ==========================================
+  // JUST "JARVIS"
+  // ==========================================
+
+  if (!input) {
+
+    await message.reply(
+      "Yes, sir? 🤖"
+    );
+
+    return;
+  }
+
+  // Split command
+  const args = input.split(/\s+/);
+
+  const commandName =
+    args.shift().toLowerCase();
+
+  console.log(
+    `[JARVIS COMMAND NAME] ${commandName}`
+  );
+
+
+  // ==========================================
   // HELP
-  // ===============================
+  // ==========================================
 
   if (commandName === "help") {
-    return message.reply(
+
+    await message.reply(
       "**🤖 JARVIS COMMANDS**\n\n" +
-      "`jarvis help` — Show this menu\n" +
-      "`jarvis timeout @user 10m` — Timeout a member\n" +
-      "`jarvis kick @user` — Kick a member\n" +
-      "`jarvis ban @user` — Ban a member\n" +
-      "`jarvis clear 10` — Delete messages\n" +
-      "`jarvis say hello` — Make Jarvis speak"
+
+      "**Moderation**\n" +
+      "`jarvis timeout @user 10m`\n" +
+      "`jarvis kick @user`\n" +
+      "`jarvis ban @user`\n" +
+      "`jarvis clear 10`\n\n" +
+
+      "**Utility**\n" +
+      "`jarvis say hello`\n" +
+      "`jarvis help`\n\n" +
+
+      "**Chat**\n" +
+      "`jarvis hello`\n" +
+      "`jarvis good morning`\n" +
+      "`jarvis are you there`"
     );
+
+    return;
   }
 
-  // ===============================
+
+  // ==========================================
   // TIMEOUT
-  // ===============================
+  // ==========================================
 
   if (commandName === "timeout") {
-    if (!message.member.permissions.has("ModerateMembers")) {
-      return message.reply(
+
+    if (
+      !message.member.permissions.has(
+        PermissionsBitField.Flags.ModerateMembers
+      )
+    ) {
+
+      await message.reply(
         "❌ You don't have permission to timeout members."
       );
+
+      return;
     }
 
-    const member = message.mentions.members.first();
+    const member =
+      message.mentions.members.first();
 
     if (!member) {
-      return message.reply(
+
+      await message.reply(
         "❌ Mention the person you want to timeout."
       );
+
+      return;
     }
 
-    const duration = args.find(arg =>
-      /^\d+(s|m|h|d)$/i.test(arg)
-    );
+    const duration =
+      args.find(arg =>
+        /^\d+(s|m|h|d)$/i.test(arg)
+      );
 
     if (!duration) {
-      return message.reply(
-        "❌ Use a duration like `10m`, `2h`, or `1d`."
+
+      await message.reply(
+        "❌ Tell me the duration.\nExample: `jarvis timeout @user 10m`"
       );
+
+      return;
     }
 
-    const match = duration.match(/^(\d+)(s|m|h|d)$/i);
+    const match =
+      duration.match(
+        /^(\d+)(s|m|h|d)$/i
+      );
 
-    const amount = parseInt(match[1], 10);
-    const unit = match[2].toLowerCase();
+    const amount =
+      parseInt(match[1], 10);
+
+    const unit =
+      match[2].toLowerCase();
 
     const multipliers = {
+
       s: 1000,
+
       m: 60 * 1000,
+
       h: 60 * 60 * 1000,
+
       d: 24 * 60 * 60 * 1000
+
     };
 
-    const durationMs = amount * multipliers[unit];
+    const durationMs =
+      amount * multipliers[unit];
 
-    // Discord maximum timeout = 28 days
-    if (durationMs > 28 * 24 * 60 * 60 * 1000) {
-      return message.reply(
+    // Discord maximum = 28 days
+    if (
+      durationMs >
+      28 * 24 * 60 * 60 * 1000
+    ) {
+
+      await message.reply(
         "❌ Discord only allows timeouts up to 28 days."
       );
+
+      return;
     }
 
     if (!member.moderatable) {
-      return message.reply(
-        "❌ I can't timeout that member."
+
+      await message.reply(
+        "❌ I can't timeout that member. Check Jarvis's role position."
       );
+
+      return;
     }
 
     try {
+
       await member.timeout(
         durationMs,
-        "JARVIS text command"
+        `JARVIS command by ${message.author.tag}`
       );
 
-      return message.reply(
+      await message.reply(
         `⏱️ **${member.user.tag}** has been timed out for **${duration}**.`
       );
-    } catch (error) {
-      console.error(error);
 
-      return message.reply(
+    } catch (error) {
+
+      console.error(
+        "TIMEOUT ERROR:",
+        error
+      );
+
+      await message.reply(
         "❌ I couldn't timeout that member."
       );
     }
+
+    return;
   }
 
-  // ===============================
+
+  // ==========================================
   // KICK
-  // ===============================
+  // ==========================================
 
   if (commandName === "kick") {
-    if (!message.member.permissions.has("KickMembers")) {
-      return message.reply(
+
+    if (
+      !message.member.permissions.has(
+        PermissionsBitField.Flags.KickMembers
+      )
+    ) {
+
+      await message.reply(
         "❌ You don't have permission to kick members."
       );
+
+      return;
     }
 
-    const member = message.mentions.members.first();
+    const member =
+      message.mentions.members.first();
 
     if (!member) {
-      return message.reply(
+
+      await message.reply(
         "❌ Mention the person you want to kick."
       );
+
+      return;
     }
 
     if (!member.kickable) {
-      return message.reply(
+
+      await message.reply(
         "❌ I can't kick that member."
       );
+
+      return;
     }
 
     try {
-      await member.kick("JARVIS text command");
 
-      return message.reply(
+      await member.kick(
+        `JARVIS command by ${message.author.tag}`
+      );
+
+      await message.reply(
         `👢 **${member.user.tag}** has been kicked.`
       );
-    } catch (error) {
-      console.error(error);
 
-      return message.reply(
+    } catch (error) {
+
+      console.error(
+        "KICK ERROR:",
+        error
+      );
+
+      await message.reply(
         "❌ I couldn't kick that member."
       );
     }
+
+    return;
   }
 
-  // ===============================
+
+  // ==========================================
   // BAN
-  // ===============================
+  // ==========================================
 
   if (commandName === "ban") {
-    if (!message.member.permissions.has("BanMembers")) {
-      return message.reply(
+
+    if (
+      !message.member.permissions.has(
+        PermissionsBitField.Flags.BanMembers
+      )
+    ) {
+
+      await message.reply(
         "❌ You don't have permission to ban members."
       );
+
+      return;
     }
 
-    const member = message.mentions.members.first();
+    const member =
+      message.mentions.members.first();
 
     if (!member) {
-      return message.reply(
+
+      await message.reply(
         "❌ Mention the person you want to ban."
       );
+
+      return;
     }
 
     if (!member.bannable) {
-      return message.reply(
+
+      await message.reply(
         "❌ I can't ban that member."
       );
+
+      return;
     }
 
     try {
+
       await member.ban({
-        reason: "JARVIS text command"
+        reason:
+          `JARVIS command by ${message.author.tag}`
       });
 
-      return message.reply(
+      await message.reply(
         `🔨 **${member.user.tag}** has been banned.`
       );
-    } catch (error) {
-      console.error(error);
 
-      return message.reply(
+    } catch (error) {
+
+      console.error(
+        "BAN ERROR:",
+        error
+      );
+
+      await message.reply(
         "❌ I couldn't ban that member."
       );
     }
+
+    return;
   }
 
-  // ===============================
+
+  // ==========================================
   // CLEAR
-  // ===============================
+  // ==========================================
 
   if (commandName === "clear") {
-    if (!message.member.permissions.has("ManageMessages")) {
-      return message.reply(
+
+    if (
+      !message.member.permissions.has(
+        PermissionsBitField.Flags.ManageMessages
+      )
+    ) {
+
+      await message.reply(
         "❌ You don't have permission to delete messages."
       );
+
+      return;
     }
 
-    const amount = parseInt(args[0], 10);
+    const amount =
+      parseInt(args[0], 10);
 
-    if (!amount || amount < 1 || amount > 100) {
-      return message.reply(
-        "❌ Choose a number from 1 to 100."
+    if (
+      !amount ||
+      amount < 1 ||
+      amount > 100
+    ) {
+
+      await message.reply(
+        "❌ Use a number from 1 to 100."
       );
+
+      return;
     }
 
     try {
-      const deleted = await message.channel.bulkDelete(
-        amount + 1,
-        true
-      );
 
-      const reply = await message.channel.send(
-        `🧹 Deleted **${deleted.size - 1}** messages.`
-      );
+      const deleted =
+        await message.channel.bulkDelete(
+          amount + 1,
+          true
+        );
 
-      setTimeout(() => {
-        reply.delete().catch(() => {});
-      }, 3000);
+      const reply =
+        await message.channel.send(
+          `🧹 Deleted **${Math.max(
+            deleted.size - 1,
+            0
+          )}** messages.`
+        );
+
+      setTimeout(
+        () => reply.delete().catch(() => {}),
+        3000
+      );
 
     } catch (error) {
-      console.error(error);
 
-      return message.reply(
+      console.error(
+        "CLEAR ERROR:",
+        error
+      );
+
+      await message.reply(
         "❌ I couldn't delete those messages."
       );
     }
@@ -325,129 +549,207 @@ client.on(Events.MessageCreate, async message => {
     return;
   }
 
-  // ===============================
+
+  // ==========================================
   // SAY
-  // ===============================
+  // ==========================================
 
   if (commandName === "say") {
-    if (!message.member.permissions.has("ManageMessages")) {
-      return message.reply(
+
+    if (
+      !message.member.permissions.has(
+        PermissionsBitField.Flags.ManageMessages
+      )
+    ) {
+
+      await message.reply(
         "❌ You don't have permission to use this command."
       );
+
+      return;
     }
 
-    const text = args.join(" ");
+    const text =
+      args.join(" ");
 
     if (!text) {
-      return message.reply(
+
+      await message.reply(
         "❌ Tell me what to say."
       );
+
+      return;
     }
 
     await message.delete().catch(() => {});
 
-    return message.channel.send(text);
+    await message.channel.send(text);
+
+    return;
   }
 
-  // ===============================
-  // AUTO REPLIES
-  // ===============================
 
-  const lower = input.toLowerCase();
+  // ==========================================
+  // AUTO REPLIES
+  // ==========================================
+
+  const lower =
+    input.toLowerCase();
+
 
   if (
     lower === "hello" ||
     lower === "hi" ||
     lower === "hey"
   ) {
-    return message.reply(
+
+    await message.reply(
       "Hello, sir. At your service. 🤖"
     );
+
+    return;
   }
 
-  if (lower.includes("good morning")) {
-    return message.reply(
+
+  if (
+    lower.includes("good morning")
+  ) {
+
+    await message.reply(
       "Good morning, sir. ☕"
     );
+
+    return;
   }
+
 
   if (
     lower.includes("thank you") ||
     lower.includes("thanks")
   ) {
-    return message.reply(
+
+    await message.reply(
       "You're welcome, sir. 🫡"
     );
+
+    return;
   }
+
 
   if (
     lower.includes("are you alive") ||
     lower.includes("are you there")
   ) {
-    return message.reply(
+
+    await message.reply(
       "Always. I'm watching the server. 👁️"
     );
+
+    return;
   }
 
-  // Unknown command
-  return message.reply(
-    `I don't know the command **${commandName}** yet. Try \`jarvis help\`.`
+
+  // ==========================================
+  // UNKNOWN COMMAND
+  // ==========================================
+
+  await message.reply(
+    `I don't know **${commandName}** yet. Try \`jarvis help\`.`
   );
+
 });
 
-// ===============================
+
+// ==========================================
 // WELCOME SYSTEM
-// ===============================
+// ==========================================
 
 client.on(Events.GuildMemberAdd, async member => {
-  const config = getConfig(member.guild.id);
+
+  const config =
+    getConfig(member.guild.id);
 
   if (!config.welcomeChannelId) return;
 
-  const channel = member.guild.channels.cache.get(
-    config.welcomeChannelId
-  );
+  const channel =
+    member.guild.channels.cache.get(
+      config.welcomeChannelId
+    );
 
-  if (!channel || !channel.isTextBased()) return;
+  if (
+    !channel ||
+    !channel.isTextBased()
+  ) return;
 
-  const text = (
-    config.welcomeMessage ||
-    "Welcome {user} to **{server}**! 🎉"
-  )
-    .replaceAll("{user}", `<@${member.id}>`)
-    .replaceAll("{server}", member.guild.name);
-
-  const embed = new EmbedBuilder()
-    .setTitle("Welcome!")
-    .setDescription(text)
-    .setThumbnail(
-      member.user.displayAvatarURL({ size: 256 })
+  const text =
+    (
+      config.welcomeMessage ||
+      "Welcome {user} to **{server}**! 🎉"
     )
-    .setTimestamp();
+      .replaceAll(
+        "{user}",
+        `<@${member.id}>`
+      )
+      .replaceAll(
+        "{server}",
+        member.guild.name
+      );
+
+  const embed =
+    new EmbedBuilder()
+      .setTitle("Welcome!")
+      .setDescription(text)
+      .setThumbnail(
+        member.user.displayAvatarURL({
+          size: 256
+        })
+      )
+      .setTimestamp();
 
   await channel
-    .send({ embeds: [embed] })
+    .send({
+      embeds: [embed]
+    })
     .catch(console.error);
 });
 
-// ===============================
+
+// ==========================================
 // LEAVE LOG
-// ===============================
+// ==========================================
 
-client.on(Events.GuildMemberRemove, async member => {
-  const config = getConfig(member.guild.id);
+client.on(
+  Events.GuildMemberRemove,
+  async member => {
 
-  if (!config.logChannelId) return;
+    const config =
+      getConfig(member.guild.id);
 
-  const channel = member.guild.channels.cache.get(
-    config.logChannelId
-  );
+    if (!config.logChannelId) return;
 
-  if (!channel || !channel.isTextBased()) return;
+    const channel =
+      member.guild.channels.cache.get(
+        config.logChannelId
+      );
 
-  await channel
-    .send(`👋 **${member.user.tag}** left the server.`)
-    .catch(console.error);
-});
+    if (
+      !channel ||
+      !channel.isTextBased()
+    ) return;
 
-client.login(process.env.DISCORD_TOKEN);
+    await channel
+      .send(
+        `👋 **${member.user.tag}** left the server.`
+      )
+      .catch(console.error);
+  }
+);
+
+
+// ==========================================
+// LOGIN
+// ==========================================
+
+client.login(
+  process.env.DISCORD_TOKEN
+);
