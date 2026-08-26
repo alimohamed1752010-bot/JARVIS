@@ -3144,7 +3144,7 @@ client.once(
       activities: [
         {
           name:
-            "anything for mr stark.",
+            "Anything for you Mr. Stark.",
           type: 3
         }
       ],
