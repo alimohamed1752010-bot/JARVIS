@@ -1,0 +1,9 @@
+{
+  "name": "jarvis-discord-bot",
+  "version": "2.0.0",
+  "description": "JARVIS — Just A Rather Very Intelligent System for Discord",
+  "main": "src/index.js",
+  "scripts": { "start": "node src/index.js", "deploy": "node src/deploy-commands.js" },
+  "dependencies": { "@google/genai": "2.18.0", "discord.js": "^14.24.2", "dotenv": "^17.2.1" },
+  "engines": { "node": ">=20" }
+}

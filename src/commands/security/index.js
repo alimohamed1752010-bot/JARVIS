@@ -1,0 +1,20 @@
+const { register } = require('../registry');
+const { getConfig, saveConfig, addCase } = require('../../utils/config');
+const { hasPerm, jarvisEmbed } = require('../../utils/helpers');
+const { lockGuild, unlockGuild } = require('../../systems/security');
+const { PermissionFlagsBits } = require('discord.js');
+
+function admin(m) { return hasPerm(m.member, PermissionFlagsBits.Administrator); }
+function needAdmin(m) { return admin(m) ? null : m.reply('❌ Administrator permission required, sir.'); }
+function bool(v) { return ['on','true','enable','enabled','yes'].includes(String(v||'').toLowerCase()); }
+
+register('lockdown',{category:'Security',description:'Lock the server down',text:async m=>{const e=needAdmin(m);if(e)return e;await lockGuild(m.guild,`Manual lockdown by ${m.author.tag}`);return m.reply('🔒 Server lockdown activated, sir.');}});
+register('unlockdown',{category:'Security',description:'Lift server lockdown',text:async m=>{const e=needAdmin(m);if(e)return e;await unlockGuild(m.guild,`Manual unlock by ${m.author.tag}`);return m.reply('🔓 Lockdown lifted, sir.');}});
+register('automod',{category:'Security',description:'Configure AutoMod',text:async(m,args)=>{const e=needAdmin(m);if(e)return e;const c=getConfig(m.guild.id);const action=(args[0]||'status').toLowerCase();if(action==='status')return m.reply({embeds:[jarvisEmbed('🛡 AutoMod',`Enabled: **${c.automod.enabled?'ON':'OFF'}**\nAnti-spam: **${c.automod.antiSpam?'ON':'OFF'}**\nAnti-links: **${c.automod.antiLinks?'ON':'OFF'}**\nAnti-invites: **${c.automod.antiInvites?'ON':'OFF'}**\nMax mentions: **${c.automod.maxMentions}**`)]});c.automod.enabled=bool(args[1]);saveConfig(m.guild.id,c);return m.reply(`🛡 AutoMod **${c.automod.enabled?'enabled':'disabled'}**.`);}});
+register('antispam',{category:'Security',description:'Toggle anti-spam',text:async(m,args)=>{const e=needAdmin(m);if(e)return e;const c=getConfig(m.guild.id);c.automod.antiSpam=bool(args[0]);saveConfig(m.guild.id,c);return m.reply(`🛡 Anti-spam **${c.automod.antiSpam?'enabled':'disabled'}**.`);}});
+register('antilinks',{category:'Security',description:'Toggle link filter',text:async(m,args)=>{const e=needAdmin(m);if(e)return e;const c=getConfig(m.guild.id);c.automod.antiLinks=bool(args[0]);saveConfig(m.guild.id,c);return m.reply(`🔗 Anti-links **${c.automod.antiLinks?'enabled':'disabled'}**.`);}});
+register('antiraid',{category:'Security',description:'Configure anti-raid',text:async(m,args)=>{const e=needAdmin(m);if(e)return e;const c=getConfig(m.guild.id);if(!args[0]||args[0]==='status')return m.reply(`🚨 Anti-raid: **${c.antiRaid.enabled?'ON':'OFF'}** | Threshold: **${c.antiRaid.joins} joins/${c.antiRaid.windowMs/1000}s** | Lockdown: **${c.antiRaid.lockdown?'ON':'OFF'}**`);c.antiRaid.enabled=bool(args[0]);if(args[1]&&/^\d+$/.test(args[1]))c.antiRaid.joins=Math.max(2,Number(args[1]));saveConfig(m.guild.id,c);return m.reply(`🚨 Anti-raid **${c.antiRaid.enabled?'enabled':'disabled'}**.`);}});
+register('blockword',{category:'Security',description:'Add blocked word',text:async(m,args)=>{const e=needAdmin(m);if(e)return e;const word=args.join(' ').trim().toLowerCase();if(!word)return m.reply('❌ Give me a word.');const c=getConfig(m.guild.id);if(!c.automod.blockedWords.includes(word))c.automod.blockedWords.push(word);saveConfig(m.guild.id,c);return m.reply(`🚫 Added **${word}** to blocked words.`);}});
+register('unblockword',{category:'Security',description:'Remove blocked word',text:async(m,args)=>{const e=needAdmin(m);if(e)return e;const word=args.join(' ').trim().toLowerCase();const c=getConfig(m.guild.id);c.automod.blockedWords=c.automod.blockedWords.filter(x=>x!==word);saveConfig(m.guild.id,c);return m.reply(`✅ Removed **${word}** from blocked words.`);}});
+register('blockedwords',{category:'Security',description:'List blocked words',text:async m=>{const c=getConfig(m.guild.id);return m.reply(c.automod.blockedWords.length?`🚫 ${c.automod.blockedWords.map(x=>`\`${x}\``).join(', ')}`:'🚫 No blocked words configured.');}});
+module.exports = {};

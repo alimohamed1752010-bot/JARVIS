@@ -1,0 +1,12 @@
+const { register } = require('../registry');
+const { pick } = require('../../utils/helpers');
+const jokes=['Why do programmers prefer dark mode? Because light attracts bugs.','I would tell you a UDP joke, but you might not get it.','Why did the developer go broke? Because he used up all his cache.','A SQL query walks into a bar and asks two tables, “Can I join you?”'];
+const facts=['Honey can remain edible for thousands of years when properly sealed.','Octopuses have three hearts.','A day on Venus is longer than a year on Venus.','Sharks existed before trees.'];
+const quotes=['“The best way to predict the future is to invent it.” — Alan Kay','“Genius is one percent inspiration, ninety-nine percent perspiration.” — Thomas Edison'];
+register('joke',{category:'Fun',description:'Tell a joke',text:async m=>m.reply(`😂 ${pick(jokes)}`)});
+register('fact',{category:'Fun',description:'Give a fact',text:async m=>m.reply(`🧠 ${pick(facts)}`)});
+register('quote',{category:'Fun',description:'Give a quote',text:async m=>m.reply(`💬 ${pick(quotes)}`)});
+register('8ball',{category:'Fun',description:'Ask the magic 8-ball',text:async m=>m.reply(`🎱 ${pick(['It is certain, sir.','Without a doubt.','Most likely, sir.','Signs point to yes.','Ask again later, sir.','My sources say no, sir.','Very doubtful, sir.'])}`)});
+register('wyr',{category:'Fun',description:'Would you rather',text:async m=>m.reply(`🤔 ${pick(['Would you rather have unlimited coffee or unlimited sleep?','Would you rather be able to fly or be invisible?','Would you rather always be 10 minutes late or 20 minutes early?','Would you rather be extremely intelligent or extremely lucky?'])}`)});
+register('roast',{category:'Interaction',description:'Roast the mentioned person, never the administrator',text:async(m,args)=>{const t=m.mentions.members.first();if(!t)return m.reply('Certainly, sir. Who shall I roast? Mention them.');const lines=[`<@${t.id}>, you have the remarkable ability to lower the room temperature without opening a window.`,`<@${t.id}>, if confidence were competence, you would be unstoppable. Unfortunately, reality remains employed.`,`<@${t.id}>, I would explain your strategy, but I cannot find one.`,`<@${t.id}>, your argument has more loading screens than substance.`];return m.reply(`🎩 Certainly, sir.\n\n${pick(lines)}`);}});
+module.exports = {};
