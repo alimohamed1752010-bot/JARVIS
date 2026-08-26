@@ -138,3 +138,29 @@ For development, keep `GUILD_ID` set so commands register to a test server quick
 ## Advanced slash command
 
 The `/jarvis` command provides a structured interface for stats, diagnostics, permissions, lockdown, AutoMod, anti-raid, autorole, verification, cases, audit activity, and snapshots.
+
+## V5 assistant layer
+
+JARVIS now has a controlled live-Discord assistant layer. Owner prompts can directly query the live member roster, online members (when Presence Intent is enabled), member roles, channels, recent channel messages, server counts, simple arithmetic, analytics, memory, personality and daily briefings. Gemini remains the language layer; Discord facts are obtained from Discord.js rather than guessed by Gemini.
+
+### Recommended Railway variables
+- `JARVIS_OWNER_ID=797626962494488636`
+- `GEMINI_MODEL=gemini-3.5-flash-lite`
+- `AI_TIMEOUT_MS=20000`
+- `PRESENCE_INTENT=true` if you want reliable online-member lists, and enable the Presence Intent in the Discord Developer Portal.
+- `DASHBOARD_ENABLED=false` unless you intentionally want the optional authenticated JSON dashboard.
+
+### Natural-language examples
+- `jarvis who's online?`
+- `jarvis find Loki`
+- `jarvis what roles does Loki have?`
+- `jarvis how many members are here?`
+- `jarvis list the channels`
+- `jarvis analytics`
+- `jarvis what is 67x69`
+- `jarvis what time is it?`
+- `jarvis memory clear`
+- `jarvis personality sarcastic`
+- `jarvis briefing`
+
+Dangerous natural-language moderation requests still require explicit confirmation and are protected from acting on the master/server owner.

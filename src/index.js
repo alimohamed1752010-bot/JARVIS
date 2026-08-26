@@ -26,6 +26,7 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
+    ...(String(process.env.PRESENCE_INTENT || 'false').toLowerCase() === 'true' ? [GatewayIntentBits.GuildPresences] : []),
     GatewayIntentBits.MessageContent
   ],
   partials: [Partials.Channel, Partials.Message]
@@ -36,6 +37,11 @@ client.commands = new Collection();
 const afkStore = new Map();
 const reminders = new Map();
 const { conversationalReply, clearMemory, getAIStatus } = require("./ai");
+const discordTools = require("./tools/discordTools");
+const { recordMessage, getTopUsers } = require("./systems/analytics");
+const { inspectAudit } = require("./systems/security");
+const { startScheduler } = require("./systems/scheduler");
+const { startDashboard } = require("./dashboard");
 
 // ============================================================
 // AI DIAGNOSTICS
@@ -119,8 +125,15 @@ function defaultConfig() {
     reminders: [],
     warnings: {},
     ai: {
-      memory: {}
-    }
+      memory: {},
+      personality: "classic",
+      dailyBriefing: { enabled: false, channelId: null, hour: 9 }
+    },
+    warningEscalation: {
+      enabled: false,
+      levels: {}
+    },
+    security: { antiNuke: true }
   };
 }
 
@@ -199,6 +212,10 @@ function normalizeConfig(config) {
   config.reminders ??= [];
   config.ai ??= {};
   config.ai.memory ??= {};
+  config.ai.personality ??= "classic";
+  config.ai.dailyBriefing ??= { enabled:false, channelId:null, hour:9 };
+  config.warningEscalation ??= { enabled:false, levels:{} };
+  config.security ??= { antiNuke:true };
   return config;
 }
 
@@ -236,6 +253,25 @@ function clearWarnings(guildId, userId) {
 
   saveConfig(guildId, config);
 }
+
+
+registerCommand("memory", "System", async (message,args) => {
+  const cfg=getConfig(message.guild.id); const target=args.find(x=>/^<@!?\d+>$/.test(x))?.match(/\d+/)?.[0] || message.author.id;
+  if(args[0]?.toLowerCase()==='clear'){ clearMemory(cfg,message.guild.id,target); saveConfig(message.guild.id,cfg); return message.reply(`🧠 Memory cleared for <@${target}>, sir.`); }
+  const mem=cfg.ai?.memory?.[message.guild.id]?.[target] || []; return message.reply(`🧠 Memory entries for <@${target}>: **${mem.length}**.`);
+}, "View or clear JARVIS AI memory.");
+
+registerCommand("personality", "System", async (message,args) => {
+  const cfg=getConfig(message.guild.id); const modes=['classic','professional','sarcastic','strict','chaotic'];
+  if(!args[0]) return message.reply(`🎭 Current personality: **${cfg.ai?.personality||'classic'}**. Options: ${modes.join(', ')}.`);
+  const mode=args[0].toLowerCase(); if(!modes.includes(mode) && mode!=='custom') return message.reply(`❌ Choose: ${modes.join(', ')}, or custom.`);
+  cfg.ai.personality=mode; saveConfig(message.guild.id,cfg); return message.reply(`🎭 JARVIS personality set to **${mode}**, sir.`);
+}, "Configure JARVIS personality.");
+
+registerCommand("briefing", "System", async (message,args) => {
+  const cfg=getConfig(message.guild.id); if(args[0]?.toLowerCase()==='off'){cfg.ai.dailyBriefing.enabled=false;saveConfig(message.guild.id,cfg);return message.reply('📋 Daily briefing disabled, sir.');}
+  const ch=message.mentions.channels.first()||message.channel; cfg.ai.dailyBriefing={enabled:true,channelId:ch.id,hour:Number(args.find(x=>/^\d{1,2}$/.test(x))??9)}; saveConfig(message.guild.id,cfg); return message.reply(`📋 Daily briefing enabled in **#${ch.name}**.`);
+}, "Configure the daily JARVIS briefing.");
 
 // ============================================================
 // HELPERS
@@ -416,12 +452,42 @@ async function confirmModerationAction(message, action, target, reason) {
   return true;
 }
 
+function calculateSimpleMath(text) {
+  const expr = String(text || '').replace(/,/g,'').match(/(?:what\s+is\s+)?(-?\d+(?:\.\d+)?)\s*(x|\*|×|\+|minus|\-|÷|\/|%)\s*(-?\d+(?:\.\d+)?)/i);
+  if (!expr) return null;
+  const a=Number(expr[1]), op=expr[2].toLowerCase(), b=Number(expr[3]); let value;
+  if(op==='x'||op==='*'||op==='×') value=a*b; else if(op==='+') value=a+b; else if(op==='minus'||op==='-') value=a-b; else if(op==='÷'||op==='/') value=b===0?null:a/b; else if(op==='%') value=a%b;
+  if(value===null || !Number.isFinite(value)) return null;
+  return Number.isInteger(value)?String(value):String(Number(value.toFixed(10)));
+}
+
+async function liveDiscordContext(message, input) {
+  const text=String(input||'').trim();
+  if (/\b(?:can you|do you)\s+(?:see|access|view)\s+(?:the )?(?:member|server)\s*list\b|\bmember list\b/i.test(text)) { const members=await discordTools.fetchAllMembers(message.guild); return `Yes, sir. I can query the live member roster. I currently have **${members.size}** members available to inspect.`; }
+  if (/\b(?:who(?:'s| is)|which members are)\s+(?:currently\s+)?online\b|\bonline members\b|\blist (?:the )?(?:online|active) members\b/i.test(text)) {
+    const online=await discordTools.onlineMembers(message.guild); const names=online.map(m=>`${m.displayName}${m.user.bot?' [BOT]':''}`);
+    if(!names.length) return 'There are currently no members with a visible online presence.';
+    return `There are **${names.length}** members currently online:\n${names.slice(0,80).map(n=>`• ${n}`).join('\n')}${names.length>80?'\n• …and more':''}`;
+  }
+  const find=text.match(/\b(?:find|search for|look for|locate)\s+(.+)$/i);
+  if(find){ await discordTools.fetchAllMembers(message.guild); const q=find[1].replace(/[?.!]+$/,'').trim(); const found=await discordTools.findMembers(message.guild,q); if(!found.size)return `I couldn't find a member matching **${q}**, sir.`; return `I found ${found.size>1?'several members':'a member'} matching **${q}**:\n${found.first(10).map(m=>`• **${m.displayName}** — ${m.user.tag} — ${m.presence?.status||'offline'} — ${m.roles.cache.filter(r=>r.id!==message.guild.id).map(r=>r.name).join(', ')||'No roles'}`).join('\n')}`; }
+  const roleQ=text.match(/\b(?:what roles does|which roles does)\s+(.+?)\s+(?:have|has)\??$/i);
+  if(roleQ){ const m=await discordTools.getMember(message.guild,roleQ[1]); if(!m)return `I couldn't find **${roleQ[1]}**, sir.`; return `**${m.displayName}** has: ${m.roles.cache.filter(r=>r.id!==message.guild.id).map(r=>r.name).join(', ')||'no additional roles'}.`; }
+  if(/\bhow many (?:people|members)\b|\bmember count\b|\bhow big is (?:the|this) server\b/i.test(text)) { const o=await discordTools.getServerOverview(message.guild); return `This server currently has **${o.members}** members, of whom **${o.bots}** are bots. **${o.online}** have a visible online presence, sir.`; }
+  if(/\banalytics\b|\bserver statistics\b|\bmost active members?\b/i.test(text)){ const top=getTopUsers(message.guild.id,5); return `**JARVIS Server Analytics**\nMessages observed since startup: **${top.reduce((n,x)=>n+x.count,0)}**\nTop active members:\n${top.length?top.map(x=>`• <@${x.userId}> — ${x.count} messages`).join('\n'):'No activity recorded yet.'}`; }
+  if(/\b(?:what|which) roles (?:are|do we have)\b|\blist (?:the )?roles\b/i.test(text)) { const roles=message.guild.roles.cache.sort((a,b)=>b.position-a.position).map(r=>r.name).filter(n=>n!=='@everyone'); return `The server has **${roles.length}** roles:\n${roles.slice(0,80).map(r=>`• ${r}`).join('\n')}`; }
+  if(/\b(?:what|which) channels (?:are|do we have)\b|\blist (?:the )?channels\b/i.test(text)) { const channels=message.guild.channels.cache.filter(c=>c.type!==ChannelType.GuildCategory).sort((a,b)=>a.position-b.position); return `The server has **${channels.size}** non-category channels:\n${channels.map(c=>`• #${c.name}`).slice(0,80).join('\n')}`; }
+  const recent=text.match(/\b(?:what did|show me)\s+(?:the )?(?:last|recent)\s+(\d+)\s+messages?\b/i);
+  if(recent){ const msgs=await discordTools.getRecentMessages(message.channel,Math.min(Number(recent[1]),25)); return msgs.length?msgs.map(m=>`• **${m.author}**: ${m.content||'[no text]'}`).join('\n'):'No messages available.'; }
+  return null;
+}
+
 async function handleOwnerToolRequest(message, input) {
   const text = String(input || '').trim();
+  const math=calculateSimpleMath(text); if(math!==null){ await message.reply(`**${math}, sir.**`); return true; }
   if (looksLikeClockQuestion(text)) { await message.reply(localDateTimeReply()); return true; }
-  if (/\bhow many (?:people|members)\b|\bmember count\b|\bhow big is (?:the|this) server\b/i.test(text)) {
-    await message.reply(`There are **${message.guild.memberCount}** members in this server, sir.`); return true;
-  }
+  const live=await liveDiscordContext(message,text); if(live){ await message.reply(live.slice(0,1900)); return true; }
+
   const action = dangerousActionFromText(text);
   const target = memberFromMention(message);
   if (action && target) {
@@ -716,9 +782,11 @@ registerCommand(
         duration,
         `JARVIS: ${message.author.tag} — ${reason}`
       );
+      const c = addCase(message.guild.id, { action: "TIMEOUT", userId: member.id, moderatorId: message.author.id, reason, evidence: { channelId: message.channel.id, messageId: message.id } });
+      await logEvent(message.guild, `⏱️ **${member.user.tag}** was timed out by **${message.author.tag}** — Case #${c.id} — ${reason}`);
 
       await message.reply(
-        `⏱️ **${member.user.tag}** has been timed out for **${durationArg}**.\nReason: ${reason}`
+        `⏱️ **${member.user.tag}** has been timed out for **${durationArg}**.\nReason: ${reason}\nCase: **#${c.id}**`
       );
     } catch (error) {
       console.error(error);
@@ -753,6 +821,7 @@ registerCommand(
         "❌ Mention the member."
       );
     }
+    if (member.id === getOwnerId() || member.id === message.guild.ownerId) return message.reply("🛡️ I will not moderate the master or server owner, sir.");
 
     if (!member.kickable) {
       return message.reply(
@@ -805,6 +874,7 @@ registerCommand(
         "❌ Mention the member."
       );
     }
+    if (member.id === getOwnerId() || member.id === message.guild.ownerId) return message.reply("🛡️ I will not moderate the master or server owner, sir.");
 
     if (!member.bannable) {
       return message.reply(
@@ -952,16 +1022,14 @@ registerCommand(
       args.slice(1).join(" ") ||
       "No reason provided";
 
-    const warnings = addWarning(
-      message.guild.id,
-      member.id,
-      reason,
-      message.author.tag
-    );
-
-    await message.reply(
-      `⚠️ **${member.user.tag}** has been warned.\nWarnings: **${warnings.length}**\nReason: ${reason}`
-    );
+    if (member.id === getOwnerId()) return message.reply("Absolutely not, sir. I do not issue warnings against my master.");
+    const warnings = addWarning(message.guild.id, member.id, reason, message.author.tag);
+    const cfg=getConfig(message.guild.id);
+    const escalation=cfg.warningEscalation?.enabled ? cfg.warningEscalation.levels?.[String(warnings.length)] : null;
+    await message.reply(`⚠️ **${member.user.tag}** has been warned.\nWarnings: **${warnings.length}**\nReason: ${reason}${escalation?`\nEscalation configured: **${escalation}**.`:''}`);
+    if(escalation==='timeout' && member.moderatable) await member.timeout(10*60*1000,'JARVIS warning escalation').catch(()=>{});
+    if(escalation==='kick' && member.kickable) await member.kick('JARVIS warning escalation').catch(()=>{});
+    if(escalation==='ban' && member.bannable) await member.ban({reason:'JARVIS warning escalation'}).catch(()=>{});
   },
   "Warn a member."
 );
@@ -3341,6 +3409,9 @@ client.once(
     console.log("=================================");
     console.log("");
 
+    startScheduler(client,getConfig);
+    startDashboard(client,getConfig);
+
     bot.user.setPresence({
       activities: [
         {
@@ -3453,10 +3524,19 @@ client.on(
     }
 
     const config = getConfig(message.guild.id);
+    recordMessage(message.guild.id, message.author.id);
 
     // ========================================================
     // AUTO MODERATION (runs independently of JARVIS commands)
     // ========================================================
+    if (config.security?.antiNuke) {
+      const now=Date.now();
+      if (!message.guild.__jarvisLastAudit || now-message.guild.__jarvisLastAudit>12000) {
+        message.guild.__jarvisLastAudit=now;
+        inspectAudit(message.guild, logEvent, addCase).catch(e=>console.error('[ANTI-NUKE]',e));
+      }
+    }
+
     if (config.automod?.enabled) {
       const content = rawContent.toLowerCase();
       const mentionCount = message.mentions.users.size + message.mentions.roles.size;
@@ -3695,7 +3775,9 @@ client.on(
           message,
           config,
           saveConfig,
-          prompt: input
+          prompt: input,
+          mode: config.ai?.personality || 'classic',
+          context: `Live Discord context: server=${message.guild.name}; members=${message.guild.memberCount}; current channel=#${message.channel.name}. Do not infer private data beyond Discord context explicitly provided.`
         });
 
         if (aiReply) {
@@ -3755,7 +3837,9 @@ client.on(
           message,
           config,
           saveConfig,
-          prompt
+          prompt,
+          mode: config.ai?.personality || 'classic',
+          context: `Live Discord context: server=${message.guild.name}; members=${message.guild.memberCount}; current channel=#${message.channel.name}.`
         });
 
         if (aiReply) {
@@ -3799,6 +3883,8 @@ client.on(
         const now = Date.now();
         member.guild.__jarvisJoins = member.guild.__jarvisJoins.filter(t => now - t < (config.antiRaid.windowMs || 10000));
         member.guild.__jarvisJoins.push(now);
+        const accountAge = Date.now() - member.user.createdTimestamp;
+        if (accountAge < 24*60*60*1000) { await logEvent(member.guild, `⚠️ **JARVIS SECURITY:** Newly created account joined: **${member.user.tag}** (account age under 24h).`); }
         if (member.guild.__jarvisJoins.length >= (config.antiRaid.joins || 8)) {
           await logEvent(member.guild, `🚨 **ANTI-RAID ALERT:** ${member.guild.__jarvisJoins.length} members joined in ${(config.antiRaid.windowMs || 10000)/1000}s.`);
           if (config.antiRaid.lockdown && !config.lockdown) {
