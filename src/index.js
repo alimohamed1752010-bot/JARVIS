@@ -78,6 +78,31 @@ function defaultConfig() {
       process.env.WELCOME_MESSAGE ||
       "Welcome {user} to **{server}**! 🎉",
     muteRoleId: null,
+    autoroleId: null,
+    verificationRoleId: null,
+    verificationChannelId: null,
+    ticketCategoryId: null,
+    ticketLogChannelId: null,
+    automod: {
+      enabled: false,
+      antiSpam: true,
+      antiLinks: false,
+      antiInvites: true,
+      maxMentions: 5,
+      spamWindowMs: 6000,
+      spamMaxMessages: 6,
+      blockedWords: []
+    },
+    antiRaid: {
+      enabled: false,
+      joins: 8,
+      windowMs: 10000,
+      lockdown: false
+    },
+    lockdown: false,
+    cases: [],
+    customCommands: {},
+    reminders: [],
     warnings: {}
   };
 }
@@ -92,10 +117,10 @@ function getConfig(guildId) {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
 
-    return {
+    return normalizeConfig({
       ...defaultConfig(),
       ...parsed
-    };
+    });
   } catch (error) {
     console.error("[CONFIG ERROR]", error);
     return defaultConfig();
@@ -109,10 +134,42 @@ function saveConfig(guildId, config) {
     recursive: true
   });
 
-  fs.writeFileSync(
-    file,
-    JSON.stringify(config, null, 2)
-  );
+  const temp = `${file}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(config, null, 2));
+  fs.renameSync(temp, file);
+}
+
+function addCase(guildId, data) {
+  const config = getConfig(guildId);
+  config.cases ??= [];
+  const nextId = (config.cases.at(-1)?.id || 0) + 1;
+  const entry = { id: nextId, at: new Date().toISOString(), ...data };
+  config.cases.push(entry);
+  if (config.cases.length > 1000) config.cases = config.cases.slice(-1000);
+  saveConfig(guildId, config);
+  return entry;
+}
+
+async function logEvent(guild, embedOrText) {
+  try {
+    const config = getConfig(guild.id);
+    if (!config.logChannelId) return;
+    const channel = guild.channels.cache.get(config.logChannelId);
+    if (!channel?.isTextBased()) return;
+    if (typeof embedOrText === "string") await channel.send(embedOrText);
+    else await channel.send({ embeds: [embedOrText] });
+  } catch (error) {
+    console.error("[LOG ERROR]", error);
+  }
+}
+
+function normalizeConfig(config) {
+  config.automod = { ...defaultConfig().automod, ...(config.automod || {}) };
+  config.antiRaid = { ...defaultConfig().antiRaid, ...(config.antiRaid || {}) };
+  config.cases ??= [];
+  config.customCommands ??= {};
+  config.reminders ??= [];
+  return config;
 }
 
 // ============================================================
@@ -346,6 +403,7 @@ registerCommand(
 
     const order = [
       "System",
+      "Security",
       "Moderation",
       "Configuration",
       "Utility",
@@ -503,8 +561,10 @@ registerCommand(
         `JARVIS: ${message.author.tag} — ${reason}`
       );
 
+      const c = addCase(message.guild.id, { action: "KICK", userId: member.id, moderatorId: message.author.id, reason });
+      await logEvent(message.guild, `👢 **${member.user.tag}** was kicked by **${message.author.tag}** — Case #${c.id} — ${reason}`);
       await message.reply(
-        `👢 **${member.user.tag}** has been kicked.\nReason: ${reason}`
+        `👢 **${member.user.tag}** has been kicked.\nReason: ${reason}\nCase: **#${c.id}**`
       );
     } catch {
       await message.reply(
@@ -554,8 +614,10 @@ registerCommand(
           `JARVIS: ${message.author.tag} — ${reason}`
       });
 
+      const c = addCase(message.guild.id, { action: "BAN", userId: member.id, moderatorId: message.author.id, reason });
+      await logEvent(message.guild, `🔨 **${member.user.tag}** was banned by **${message.author.tag}** — Case #${c.id} — ${reason}`);
       await message.reply(
-        `🔨 **${member.user.tag}** has been banned.\nReason: ${reason}`
+        `🔨 **${member.user.tag}** has been banned.\nReason: ${reason}\nCase: **#${c.id}**`
       );
     } catch {
       await message.reply(
@@ -2427,6 +2489,315 @@ registerCommand(
 );
 
 // ============================================================
+// ADVANCED JARVIS SYSTEMS
+// ============================================================
+
+registerCommand("stats", "System", async message => {
+  const guild = message.guild;
+  const text = [
+    `👥 Members: **${guild.memberCount}**`,
+    `💬 Channels: **${guild.channels.cache.size}**`,
+    `🎭 Roles: **${guild.roles.cache.size}**`,
+    `🤖 JARVIS uptime: **${formatUptime(client.uptime)}**`,
+    `📡 API latency: **${Math.round(client.ws.ping)}ms**`
+  ].join("\n");
+  await message.reply({ embeds: [new EmbedBuilder().setTitle("📊 JARVIS Server Report").setDescription(text).setColor(0x00aeff).setTimestamp()] });
+}, "Show a live server report.");
+
+registerCommand("case", "Moderation", async (message, args) => {
+  const id = Number(args[0]);
+  const config = getConfig(message.guild.id);
+  const entry = config.cases?.find(c => c.id === id);
+  if (!entry) return message.reply("❌ I couldn't find that case, sir.");
+  await message.reply({ embeds: [new EmbedBuilder().setTitle(`📁 Case #${entry.id}`).setColor(0x00aeff).addFields(
+    { name: "Action", value: entry.action || "Unknown", inline: true },
+    { name: "User", value: entry.userId ? `<@${entry.userId}>` : "Unknown", inline: true },
+    { name: "Moderator", value: entry.moderatorId ? `<@${entry.moderatorId}>` : "Unknown", inline: true },
+    { name: "Reason", value: truncate(entry.reason || "No reason provided") },
+    { name: "Time", value: `<t:${Math.floor(new Date(entry.at).getTime()/1000)}:F>` }
+  )] });
+}, "View a moderation case by ID.");
+
+registerCommand("cases", "Moderation", async (message, args) => {
+  const member = message.mentions.members.first();
+  const config = getConfig(message.guild.id);
+  const rows = (config.cases || []).filter(c => !member || c.userId === member.id).slice(-15).reverse();
+  if (!rows.length) return message.reply("📁 No moderation cases found, sir.");
+  const lines = rows.map(c => `**#${c.id}** ${c.action} — <@${c.userId}> — ${truncate(c.reason || "No reason", 90)}`);
+  await message.reply({ embeds: [new EmbedBuilder().setTitle("📁 Recent Moderation Cases").setDescription(lines.join("\n")).setColor(0x00aeff)] });
+}, "List recent moderation cases.");
+
+registerCommand("lockdown", "Security", async message => {
+  if (!hasPerm(message, PermissionsBitField.Flags.ManageChannels)) return message.reply("❌ I need Manage Channels permission, sir.");
+  const config = getConfig(message.guild.id);
+  if (config.lockdown) return message.reply("🚨 Lockdown is already active, sir.");
+  config.lockdown = true;
+  saveConfig(message.guild.id, config);
+  let changed = 0;
+  for (const channel of message.guild.channels.cache.values()) {
+    if (!channel.isTextBased() || channel.isThread()) continue;
+    try { await channel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: false }); changed++; } catch {}
+  }
+  await logEvent(message.guild, `🚨 **EMERGENCY LOCKDOWN** activated by ${message.author.tag}. ${changed} channels affected.`);
+  await message.reply(`🚨 Emergency lockdown activated, sir. **${changed}** channels secured.`);
+}, "Lock public text channels during an emergency.");
+
+registerCommand("unlockdown", "Security", async message => {
+  if (!hasPerm(message, PermissionsBitField.Flags.ManageChannels)) return message.reply("❌ I need Manage Channels permission, sir.");
+  const config = getConfig(message.guild.id);
+  config.lockdown = false;
+  saveConfig(message.guild.id, config);
+  let changed = 0;
+  for (const channel of message.guild.channels.cache.values()) {
+    if (!channel.isTextBased() || channel.isThread()) continue;
+    try { await channel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: null }); changed++; } catch {}
+  }
+  await logEvent(message.guild, `🔓 Emergency lockdown deactivated by ${message.author.tag}.`);
+  await message.reply(`🔓 Lockdown lifted, sir. **${changed}** channels restored.`);
+}, "End emergency lockdown.");
+
+registerCommand("automod", "Security", async (message, args) => {
+  const config = getConfig(message.guild.id);
+  const mode = args[0]?.toLowerCase();
+  if (!["on", "off", "status"].includes(mode)) return message.reply("❌ Use `jarvis automod on`, `off`, or `status`.");
+  if (mode !== "status") { config.automod.enabled = mode === "on"; saveConfig(message.guild.id, config); }
+  await message.reply(`🛡️ AutoMod is **${config.automod.enabled ? "ONLINE" : "OFFLINE"}**, sir.`);
+}, "Enable, disable, or inspect JARVIS AutoMod.");
+
+registerCommand("antispam", "Security", async (message, args) => {
+  const config = getConfig(message.guild.id);
+  const mode = args[0]?.toLowerCase();
+  if (!["on", "off", "status"].includes(mode)) return message.reply("❌ Use `jarvis antispam on`, `off`, or `status`.");
+  if (mode !== "status") { config.automod.antiSpam = mode === "on"; config.automod.enabled = true; saveConfig(message.guild.id, config); }
+  await message.reply(`🚫 Anti-spam is **${config.automod.antiSpam ? "ONLINE" : "OFFLINE"}**.`);
+}, "Control anti-spam protection.");
+
+registerCommand("antilinks", "Security", async (message, args) => {
+  const config = getConfig(message.guild.id);
+  const mode = args[0]?.toLowerCase();
+  if (!["on", "off", "status"].includes(mode)) return message.reply("❌ Use `jarvis antilinks on`, `off`, or `status`.");
+  if (mode !== "status") { config.automod.antiLinks = mode === "on"; config.automod.enabled = true; saveConfig(message.guild.id, config); }
+  await message.reply(`🔗 Anti-link protection is **${config.automod.antiLinks ? "ONLINE" : "OFFLINE"}**.`);
+}, "Control link protection.");
+
+registerCommand("antiraid", "Security", async (message, args) => {
+  const config = getConfig(message.guild.id);
+  const mode = args[0]?.toLowerCase();
+  if (!["on", "off", "status"].includes(mode)) return message.reply("❌ Use `jarvis antiraid on`, `off`, or `status`.");
+  if (mode !== "status") { config.antiRaid.enabled = mode === "on"; saveConfig(message.guild.id, config); }
+  await message.reply(`🚨 Anti-raid is **${config.antiRaid.enabled ? "ONLINE" : "OFFLINE"}**.`);
+}, "Control anti-raid protection.");
+
+registerCommand("blockword", "Security", async (message, args) => {
+  const word = args.join(" ").trim().toLowerCase();
+  if (!word) return message.reply("❌ Give me a word or phrase to block.");
+  const config = getConfig(message.guild.id);
+  config.automod.blockedWords ??= [];
+  if (!config.automod.blockedWords.includes(word)) config.automod.blockedWords.push(word);
+  config.automod.enabled = true;
+  saveConfig(message.guild.id, config);
+  await message.reply(`🚫 Added **${word}** to the blocked-word list.`);
+}, "Add a blocked word to AutoMod.");
+
+registerCommand("unblockword", "Security", async (message, args) => {
+  const word = args.join(" ").trim().toLowerCase();
+  const config = getConfig(message.guild.id);
+  config.automod.blockedWords = (config.automod.blockedWords || []).filter(x => x !== word);
+  saveConfig(message.guild.id, config);
+  await message.reply(`✅ Removed **${word}** from the blocked-word list.`);
+}, "Remove a blocked word.");
+
+registerCommand("blockedwords", "Security", async message => {
+  const words = getConfig(message.guild.id).automod.blockedWords || [];
+  await message.reply(words.length ? `🚫 Blocked words: ${words.map(x => `\`${x}\``).join(", ")}` : "✅ No custom blocked words are configured.");
+}, "Show blocked words.");
+
+registerCommand("setautorole", "Configuration", async message => {
+  if (!hasPerm(message, PermissionsBitField.Flags.ManageGuild)) return message.reply("❌ I need Manage Server permission.");
+  const role = message.mentions.roles.first();
+  if (!role) return message.reply("❌ Mention the role.");
+  const config = getConfig(message.guild.id);
+  config.autoroleId = role.id;
+  saveConfig(message.guild.id, config);
+  await message.reply(`✅ Autorole set to **${role.name}**.`);
+}, "Set a role automatically given to new members.");
+
+registerCommand("autorole", "Configuration", async (message, args) => {
+  if (!hasPerm(message, PermissionsBitField.Flags.ManageGuild)) return message.reply("❌ I need Manage Server permission.");
+  const config = getConfig(message.guild.id);
+  if (args[0]?.toLowerCase() === "off") { config.autoroleId = null; saveConfig(message.guild.id, config); return message.reply("✅ Autorole disabled."); }
+  const role = message.mentions.roles.first();
+  if (!role) return message.reply(config.autoroleId ? `🎭 Autorole: <@&${config.autoroleId}>` : "🎭 Autorole is not configured.");
+  config.autoroleId = role.id; saveConfig(message.guild.id, config); await message.reply(`✅ Autorole set to ${role}.`);
+}, "View or configure autorole.");
+
+registerCommand("verifysetup", "Configuration", async message => {
+  if (!hasPerm(message, PermissionsBitField.Flags.ManageGuild)) return message.reply("❌ I need Manage Server permission.");
+  const role = message.mentions.roles.first();
+  if (!role) return message.reply("❌ Mention the verification role.");
+  const config = getConfig(message.guild.id);
+  config.verificationRoleId = role.id;
+  config.verificationChannelId = message.channel.id;
+  saveConfig(message.guild.id, config);
+  await message.reply(`✅ Verification role set to **${role.name}**. Use jarvis verify in this channel.`);
+}, "Configure a simple verification role.");
+
+registerCommand("verify", "Utility", async message => {
+  const config = getConfig(message.guild.id);
+  if (!config.verificationRoleId) return message.reply("❌ Verification has not been configured.");
+  const role = message.guild.roles.cache.get(config.verificationRoleId);
+  if (!role) return message.reply("❌ The configured verification role no longer exists.");
+  if (message.member.roles.cache.has(role.id)) return message.reply("✅ You're already verified, sir.");
+  try { await message.member.roles.add(role, "JARVIS verification"); await message.reply(`✅ Verification complete. Welcome, ${message.member}.`); } catch { await message.reply("❌ I couldn't assign the verification role."); }
+}, "Verify yourself when verification is configured.");
+
+registerCommand("snapshot", "System", async message => {
+  const g = message.guild;
+  const config = getConfig(g.id);
+  const snapshot = {
+    generatedAt: new Date().toISOString(), guildId: g.id, guildName: g.name,
+    ownerId: g.ownerId, memberCount: g.memberCount,
+    channels: g.channels.cache.map(c => ({ id: c.id, name: c.name, type: c.type, parentId: c.parentId })),
+    roles: g.roles.cache.map(r => ({ id: r.id, name: r.name, position: r.position, color: r.hexColor })),
+    config
+  };
+  const file = path.join(__dirname, "..", "data", `${g.id}-snapshot-${Date.now()}.json`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(snapshot, null, 2));
+  await message.reply(`📦 Snapshot created with **${snapshot.channels.length} channels** and **${snapshot.roles.length} roles**.`);
+}, "Create a JSON server configuration snapshot.");
+
+registerCommand("audit", "Security", async message => {
+  if (!hasPerm(message, PermissionsBitField.Flags.ViewAuditLog)) return message.reply("❌ I need View Audit Log permission.");
+  const logs = await message.guild.fetchAuditLogs({ limit: 10 }).catch(() => null);
+  if (!logs) return message.reply("❌ I couldn't read the audit log.");
+  const lines = logs.entries.map(e => `**${e.action}** — ${e.executor?.tag || "Unknown"} — <t:${Math.floor(e.createdTimestamp/1000)}:R>`).slice(0, 10);
+  await message.reply({ embeds: [new EmbedBuilder().setTitle("🔎 Recent Audit Activity").setDescription(lines.join("\n") || "No entries.").setColor(0x00aeff)] });
+}, "Show recent Discord audit activity.");
+
+registerCommand("permissions", "Information", async message => {
+  const p = message.guild.members.me?.permissions;
+  if (!p) return message.reply("❌ I couldn't inspect my permissions.");
+  const important = ["Administrator", "ManageGuild", "ManageChannels", "ManageRoles", "ManageMessages", "KickMembers", "BanMembers", "ModerateMembers", "ViewAuditLog", "ManageWebhooks"];
+  await message.reply({ embeds: [new EmbedBuilder().setTitle("🔐 JARVIS Permissions").setDescription(important.map(x => `${p.has(PermissionsBitField.Flags[x]) ? "✅" : "❌"} ${x}`).join("\n")).setColor(0x00aeff)] });
+}, "Show JARVIS's important permissions.");
+
+registerCommand("diagnostics", "System", async message => {
+  const me = message.guild.members.me;
+  const config = getConfig(message.guild.id);
+  await message.reply({ embeds: [new EmbedBuilder().setTitle("🩺 JARVIS Diagnostics").setColor(0x00aeff).addFields(
+    { name: "Status", value: "ONLINE", inline: true },
+    { name: "API", value: `${Math.round(client.ws.ping)}ms`, inline: true },
+    { name: "Uptime", value: formatUptime(client.uptime), inline: true },
+    { name: "Role Position", value: `${me?.roles.highest?.position ?? "Unknown"}`, inline: true },
+    { name: "AutoMod", value: config.automod.enabled ? "ON" : "OFF", inline: true },
+    { name: "Anti-Raid", value: config.antiRaid.enabled ? "ON" : "OFF", inline: true }
+  )] });
+}, "Run a JARVIS health and permission diagnostic.");
+
+registerCommand("maintenance", "System", async (message, args) => {
+  const config = getConfig(message.guild.id);
+  const mode = args[0]?.toLowerCase();
+  if (!["on", "off", "status"].includes(mode)) return message.reply("❌ Use `jarvis maintenance on`, `off`, or `status`.");
+  if (mode !== "status") { config.maintenance = mode === "on"; saveConfig(message.guild.id, config); }
+  await message.reply(`🔧 Maintenance mode is **${config.maintenance ? "ON" : "OFF"}**.`);
+}, "Toggle server maintenance mode.");
+
+registerCommand("setstatus", "Configuration", async (message, args) => {
+  if (!hasPerm(message, PermissionsBitField.Flags.ManageGuild)) return message.reply("❌ I need Manage Server permission.");
+  const text = args.join(" ").trim();
+  if (!text) return message.reply("❌ Give me a status text.");
+  client.user.setPresence({ activities: [{ name: text, type: 3 }], status: "online" });
+  await message.reply(`✅ My status is now **${text}**.`);
+}, "Change JARVIS's presence text.");
+
+registerCommand("sayembed", "Utility", async (message, args) => {
+  const text = args.join(" ");
+  if (!text) return message.reply("❌ Give me text for the embed.");
+  await message.channel.send({ embeds: [new EmbedBuilder().setDescription(text).setColor(0x00aeff).setTimestamp()] });
+  await message.reply("✅ Embed delivered, sir.");
+}, "Send a clean JARVIS embed.");
+
+registerCommand("servericon", "Information", async message => {
+  const url = message.guild.iconURL({ size: 4096, extension: "png" });
+  if (!url) return message.reply("❌ This server has no icon.");
+  await message.reply(url);
+}, "Get the server icon URL.");
+
+registerCommand("emojiinfo", "Information", async message => {
+  const emoji = message.guild.emojis.cache.find(e => message.content.includes(e.id));
+  if (!emoji) return message.reply("❌ Mention or paste a custom server emoji.");
+  await message.reply(`😀 **${emoji.name}**\nID: \`${emoji.id}\`\nAnimated: **${emoji.animated ? "Yes" : "No"}**`);
+}, "Inspect a custom server emoji.");
+
+registerCommand("role", "Moderation", async (message, args) => {
+  if (!hasPerm(message, PermissionsBitField.Flags.ManageRoles)) return message.reply("❌ I need Manage Roles permission.");
+  const action = args.shift()?.toLowerCase();
+  const name = args.join(" ").trim();
+  if (!["create", "delete"].includes(action) || !name) return message.reply("❌ Use `jarvis role create Name` or `jarvis role delete Name`.");
+  const role = message.guild.roles.cache.find(r => r.name.toLowerCase() === name.toLowerCase() && !r.managed);
+  if (action === "create") {
+    if (role) return message.reply("❌ That role already exists.");
+    const created = await message.guild.roles.create({ name, reason: `JARVIS: ${message.author.tag}` });
+    await message.reply(`✅ Created role **${created.name}**.`);
+  } else {
+    if (!role) return message.reply("❌ I couldn't find that role.");
+    if (role.position >= message.guild.members.me.roles.highest.position) return message.reply("❌ That role is above JARVIS's highest role.");
+    await role.delete(`JARVIS: ${message.author.tag}`);
+    await message.reply(`🗑️ Deleted role **${name}**.`);
+  }
+}, "Create or delete a manageable role.");
+
+registerCommand("channel", "Moderation", async (message, args) => {
+  if (!hasPerm(message, PermissionsBitField.Flags.ManageChannels)) return message.reply("❌ I need Manage Channels permission.");
+  const action = args.shift()?.toLowerCase();
+  const name = args.join(" ").trim();
+  if (!["create", "delete"].includes(action) || !name) return message.reply("❌ Use `jarvis channel create name` or `jarvis channel delete name`.");
+  const existing = message.guild.channels.cache.find(c => c.name.toLowerCase() === name.toLowerCase());
+  if (action === "create") {
+    if (existing) return message.reply("❌ A channel with that name already exists.");
+    const created = await message.guild.channels.create({ name, type: ChannelType.GuildText, reason: `JARVIS: ${message.author.tag}` });
+    await message.reply(`✅ Created ${created}.`);
+  } else {
+    if (!existing) return message.reply("❌ I couldn't find that channel.");
+    await existing.delete(`JARVIS: ${message.author.tag}`);
+    await message.reply(`🗑️ Deleted **#${name}**.`);
+  }
+}, "Create or delete a text channel.");
+
+registerCommand("custom", "Configuration", async (message, args) => {
+  if (!hasPerm(message, PermissionsBitField.Flags.ManageGuild)) return message.reply("❌ I need Manage Server permission.");
+  const action = args.shift()?.toLowerCase();
+  const name = args.shift()?.toLowerCase();
+  const config = getConfig(message.guild.id);
+  config.customCommands ??= {};
+  if (action === "list") return message.reply(Object.keys(config.customCommands).length ? `🧩 Custom commands: ${Object.keys(config.customCommands).map(x => `\`${x}\``).join(", ")}` : "🧩 No custom commands configured.");
+  if (!name) return message.reply("❌ Use `jarvis custom set name response`, `delete name`, or `list`.");
+  if (action === "delete") { delete config.customCommands[name]; saveConfig(message.guild.id, config); return message.reply(`🗑️ Deleted custom command **${name}**.`); }
+  if (action === "set") {
+    const response = args.join(" ").trim();
+    if (!response) return message.reply("❌ Give me a response.");
+    config.customCommands[name] = response; saveConfig(message.guild.id, config);
+    return message.reply(`✅ Custom command **${name}** created.`);
+  }
+  return message.reply("❌ Use `jarvis custom set name response`, `delete name`, or `list`.");
+}, "Create, delete, and list custom JARVIS commands.");
+
+registerCommand("report", "System", async message => {
+  const config = getConfig(message.guild.id);
+  const report = {
+    generatedAt: new Date().toISOString(), guild: message.guild.name,
+    memberCount: message.guild.memberCount, channels: message.guild.channels.cache.size,
+    roles: message.guild.roles.cache.size, cases: config.cases?.length || 0,
+    warnings: Object.values(config.warnings || {}).reduce((n, x) => n + x.length, 0),
+    automod: config.automod.enabled, antiRaid: config.antiRaid.enabled
+  };
+  const file = path.join(__dirname, "..", "data", `${message.guild.id}-report-${Date.now()}.json`);
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(report, null, 2));
+  await message.reply(`📄 Server report generated. **${report.cases}** cases and **${report.warnings}** warnings recorded.`);
+}, "Generate a server report file.");
+
+// ============================================================
 // CONVERSATIONAL JARVIS
 // ============================================================
 
@@ -2762,7 +3133,9 @@ client.on(
         interaction,
         {
           getConfig,
-          saveConfig
+          saveConfig,
+          addCase,
+          logEvent
         }
       );
 
@@ -2816,6 +3189,46 @@ client.on(
 
     if (!rawContent) {
       return;
+    }
+
+    const config = getConfig(message.guild.id);
+
+    // ========================================================
+    // AUTO MODERATION (runs independently of JARVIS commands)
+    // ========================================================
+    if (config.automod?.enabled) {
+      const content = rawContent.toLowerCase();
+      const mentionCount = message.mentions.users.size + message.mentions.roles.size;
+      const isInvite = /(?:discord\.(?:gg|com\/invite)|discordapp\.com\/invite)\//i.test(rawContent);
+      const isLink = /https?:\/\//i.test(rawContent);
+      const blocked = (config.automod.blockedWords || []).find(w => w && content.includes(w));
+      let violation = blocked ? `blocked word: ${blocked}` : null;
+      if (!violation && config.automod.antiInvites && isInvite) violation = "Discord invite";
+      if (!violation && config.automod.antiLinks && isLink) violation = "external link";
+      if (!violation && mentionCount > (config.automod.maxMentions || 5)) violation = "mention spam";
+      if (violation) {
+        try { await message.delete(); } catch {}
+        const c = addCase(message.guild.id, { action: "AUTOMOD", userId: message.author.id, moderatorId: client.user.id, reason: violation });
+        await logEvent(message.guild, `🛡️ AutoMod removed a message from **${message.author.tag}** — ${violation} — Case #${c.id}`);
+        return;
+      }
+
+      if (config.automod.antiSpam) {
+        message.guild.__jarvisSpam ??= new Map();
+        const history = message.guild.__jarvisSpam.get(message.author.id) || [];
+        const now = Date.now();
+        const recent = history.filter(t => now - t < (config.automod.spamWindowMs || 6000));
+        recent.push(now);
+        message.guild.__jarvisSpam.set(message.author.id, recent);
+        if (recent.length > (config.automod.spamMaxMessages || 6)) {
+          const member = message.member;
+          try { if (member?.moderatable) await member.timeout(60_000, "JARVIS AutoMod anti-spam"); } catch {}
+          try { await message.delete(); } catch {}
+          const c = addCase(message.guild.id, { action: "AUTOMOD-TIMEOUT", userId: message.author.id, moderatorId: client.user.id, reason: "Message spam" });
+          await logEvent(message.guild, `🚨 AutoMod timed out **${message.author.tag}** for spam — Case #${c.id}`);
+          return;
+        }
+      }
     }
 
     const lower =
@@ -2930,6 +3343,12 @@ client.on(
       const command =
         textCommands[commandName];
 
+      const custom = getConfig(message.guild.id).customCommands?.[commandName];
+      if (!command && custom) {
+        await message.reply(custom.replaceAll("{user}", `<@${message.author.id}>`).replaceAll("{server}", message.guild.name));
+        return;
+      }
+
       if (command) {
 
         try {
@@ -3004,9 +3423,29 @@ client.on(
   async member => {
 
     try {
+      const config = getConfig(member.guild.id);
+      if (config.antiRaid?.enabled) {
+        member.guild.__jarvisJoins ??= [];
+        const now = Date.now();
+        member.guild.__jarvisJoins = member.guild.__jarvisJoins.filter(t => now - t < (config.antiRaid.windowMs || 10000));
+        member.guild.__jarvisJoins.push(now);
+        if (member.guild.__jarvisJoins.length >= (config.antiRaid.joins || 8)) {
+          await logEvent(member.guild, `🚨 **ANTI-RAID ALERT:** ${member.guild.__jarvisJoins.length} members joined in ${(config.antiRaid.windowMs || 10000)/1000}s.`);
+          if (config.antiRaid.lockdown && !config.lockdown) {
+            config.lockdown = true; saveConfig(member.guild.id, config);
+            for (const channel of member.guild.channels.cache.values()) {
+              if (!channel.isTextBased() || channel.isThread()) continue;
+              await channel.permissionOverwrites.edit(member.guild.roles.everyone, { SendMessages: false }).catch(() => {});
+            }
+          }
+          member.guild.__jarvisJoins = [];
+        }
+      }
 
-      const config =
-        getConfig(member.guild.id);
+      if (config.autoroleId) {
+        const role = member.guild.roles.cache.get(config.autoroleId);
+        if (role && role.editable) await member.roles.add(role, "JARVIS autorole").catch(() => {});
+      }
 
       if (!config.welcomeChannelId) {
         return;

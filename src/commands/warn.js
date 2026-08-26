@@ -10,20 +10,20 @@ module.exports = {
     .addStringOption(o => o.setName("reason").setDescription("Reason").setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
 
-  async execute(interaction) {
+  async execute(interaction, { getConfig, saveConfig, addCase, logEvent }) {
     const user = interaction.options.getUser("user");
     const reason = interaction.options.getString("reason");
-    const file = path.join(__dirname, "..", "..", "data", `${interaction.guild.id}-warnings.json`);
-
-    let warnings = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
-    warnings[user.id] ??= [];
-    warnings[user.id].push({
-      moderator: interaction.user.id,
+    const config = getConfig(interaction.guild.id);
+    config.warnings ??= {};
+    config.warnings[user.id] ??= [];
+    config.warnings[user.id].push({
+      moderator: interaction.user.tag,
       reason,
-      timestamp: new Date().toISOString()
+      at: new Date().toISOString()
     });
-    fs.writeFileSync(file, JSON.stringify(warnings, null, 2));
-
-    await interaction.reply(`⚠️ **${user.tag}** has been warned.\n**Reason:** ${reason}\n**Total warnings:** ${warnings[user.id].length}`);
+    saveConfig(interaction.guild.id, config);
+    const c = addCase(interaction.guild.id, { action: "WARN", userId: user.id, moderatorId: interaction.user.id, reason });
+    await logEvent(interaction.guild, `⚠️ **${user.tag}** was warned by **${interaction.user.tag}** — Case #${c.id} — ${reason}`);
+    await interaction.reply(`⚠️ **${user.tag}** has been warned.\n**Reason:** ${reason}\n**Total warnings:** ${config.warnings[user.id].length}\n**Case:** #${c.id}`);
   }
 };

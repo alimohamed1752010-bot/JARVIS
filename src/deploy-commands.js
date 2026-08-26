@@ -4,11 +4,16 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const commands = [];
+const { PermissionFlagsBits } = require("discord.js");
 const commandsPath = path.join(__dirname, "commands");
 
 for (const file of fs.readdirSync(commandsPath).filter(f => f.endsWith(".js"))) {
   const command = require(path.join(commandsPath, file));
-  commands.push(command.data.toJSON());
+  const json = command.data.toJSON();
+  // JARVIS is intentionally administrator-only. This complements the runtime check.
+  json.default_member_permissions = PermissionFlagsBits.Administrator.toString();
+  json.dm_permission = false;
+  commands.push(json);
 }
 
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
