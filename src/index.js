@@ -34,14 +34,24 @@ const client = new Client({
 
 client.commands = new Collection();
 
+// Load the hand-crafted slash commands. The large legacy command library is
+// bridged automatically into slash commands after all text commands register.
+const slashCommandsPath = path.join(__dirname, "commands");
+for (const file of fs.readdirSync(slashCommandsPath).filter(f => f.endsWith(".js"))) {
+  try { const command = require(path.join(slashCommandsPath, file)); if (command?.data?.name) client.commands.set(command.data.name, command); }
+  catch (error) { console.error(`[SLASH LOAD ERROR] ${file}`, error); }
+}
+
 const afkStore = new Map();
 const reminders = new Map();
 const { conversationalReply, clearMemory, getAIStatus } = require("./ai");
+const { addFact, getFacts, clearFacts } = require("./ai/memory");
 const discordTools = require("./tools/discordTools");
-const { recordMessage, getTopUsers } = require("./systems/analytics");
+const { recordMessage, getTopUsers, getAnalytics } = require("./systems/analytics");
 const { inspectAudit } = require("./systems/security");
 const { startScheduler } = require("./systems/scheduler");
 const { startDashboard } = require("./dashboard");
+const { buildDynamicDefinitions, executeDynamic } = require("./slashBridge");
 
 // ============================================================
 // AI DIAGNOSTICS
@@ -126,6 +136,7 @@ function defaultConfig() {
     warnings: {},
     ai: {
       memory: {},
+      facts: {},
       personality: "classic",
       dailyBriefing: { enabled: false, channelId: null, hour: 9 }
     },
@@ -212,6 +223,7 @@ function normalizeConfig(config) {
   config.reminders ??= [];
   config.ai ??= {};
   config.ai.memory ??= {};
+  config.ai.facts ??= {};
   config.ai.personality ??= "classic";
   config.ai.dailyBriefing ??= { enabled:false, channelId:null, hour:9 };
   config.warningEscalation ??= { enabled:false, levels:{} };
@@ -275,6 +287,83 @@ registerCommand("briefing", "System", async (message,args) => {
   const cfg=getConfig(message.guild.id); if(args[0]?.toLowerCase()==='off'){cfg.ai.dailyBriefing.enabled=false;saveConfig(message.guild.id,cfg);return message.reply('📋 Daily briefing disabled, sir.');}
   const ch=message.mentions.channels.first()||message.channel; cfg.ai.dailyBriefing={enabled:true,channelId:ch.id,hour:Number(args.find(x=>/^\d{1,2}$/.test(x))??9)}; saveConfig(message.guild.id,cfg); return message.reply(`📋 Daily briefing enabled in **#${ch.name}**.`);
 }, "Configure the daily JARVIS briefing.");
+
+registerCommand("remember", "System", async (message,args) => {
+  if (!await requireAdmin(message)) return;
+  const text=args.join(" ").trim();
+  const target=message.mentions.users.first() || message.author;
+  if (!text) return message.reply("❌ Tell me what to remember, sir. Example: `jarvis remember @User likes coffee`.");
+  const cfg=getConfig(message.guild.id); addFact(cfg,message.guild.id,target.id,text.replace(/<@!?\d+>/g,"").trim()); saveConfig(message.guild.id,cfg);
+  return message.reply(`🧠 Stored a long-term memory for **${getDisplayName(target)}**, sir.`);
+}, "Store a persistent JARVIS memory/fact.");
+
+registerCommand("forget", "System", async (message,args) => {
+  if (!await requireAdmin(message)) return;
+  const target=message.mentions.users.first() || message.author; const cfg=getConfig(message.guild.id);
+  if (args[0]?.toLowerCase()==="all") { clearMemory(cfg,message.guild.id,target.id); clearFacts(cfg,message.guild.id,target.id); }
+  else { clearFacts(cfg,message.guild.id,target.id); }
+  saveConfig(message.guild.id,cfg); return message.reply(`🧹 Long-term memory cleared for **${getDisplayName(target)}**, sir.`);
+}, "Clear persistent JARVIS memory for a member.");
+
+registerCommand("ask", "System", async (message,args) => {
+  if (!await requireAdmin(message)) return;
+  const prompt=args.join(" ").trim(); if(!prompt) return message.reply("❌ What would you like me to investigate, sir?");
+  const cfg=getConfig(message.guild.id);
+  try { const reply=await conversationalReply({message,config:cfg,saveConfig,prompt,mode:cfg.ai?.personality||"classic",context:`Live Discord context: server=${message.guild.name}; members=${message.guild.memberCount}; channel=#${message.channel.name}.`}); return message.reply((reply||"No useful result, sir.").slice(0,1900)); }
+  catch(e){ console.error("[ASK TEXT]",e); return message.reply("⚠️ My AI systems are unavailable right now, sir."); }
+}, "Ask JARVIS an AI question.");
+
+registerCommand("summarize", "System", async (message,args) => {
+  if (!await requireAdmin(message)) return;
+  const count=Math.min(Number(args[0])||25,100); const msgs=await discordTools.getRecentMessages(message.channel,count);
+  if(!msgs.length) return message.reply("No recent messages are available, sir.");
+  const prompt=`Summarize these recent Discord messages. Identify key topics, decisions, questions, action items, and notable moderation/security concerns.\n\n${msgs.map(m=>`[${m.author}] ${m.content}`).join("\n")}`;
+  try { const reply=await conversationalReply({message,config:getConfig(message.guild.id),saveConfig,prompt,skipMemory:true,cooldownKey:`summarize:${message.guild.id}:${message.author.id}`}); return message.reply((reply||"No summary generated.").slice(0,1900)); } catch(e){console.error("[SUMMARY]",e);return message.reply("⚠️ I couldn't summarize the channel, sir.");}
+}, "Summarize recent channel messages with AI.");
+
+registerCommand("investigate", "Security", async (message,args) => {
+  if (!await requireAdmin(message)) return; const target=message.mentions.users.first() || await discordTools.getMember(message.guild,args[0]);
+  if(!target) return message.reply("❌ Mention a member to investigate, sir."); const member=target.user?target:await message.guild.members.fetch(target.id).catch(()=>null); if(!member) return message.reply("❌ That member is not in this server.");
+  const cfg=getConfig(message.guild.id); const warnings=cfg.warnings?.[member.id]||[]; const cases=(cfg.cases||[]).filter(c=>c.userId===member.id).slice(-10).reverse(); const risk=Math.min(100,warnings.length*15+cases.length*10+(Date.now()-member.user.createdTimestamp<86400000?35:0)); const level=risk>=70?"HIGH":risk>=35?"MEDIUM":"LOW";
+  return message.reply(`🔎 **JARVIS Investigation — ${member.user.tag}**\nRisk: **${level} (${risk}/100)**\nAccount created: <t:${Math.floor(member.user.createdTimestamp/1000)}:R>\nJoined: ${member.joinedTimestamp?`<t:${Math.floor(member.joinedTimestamp/1000)}:R>`:"Unknown"}\nWarnings: **${warnings.length}** · Cases: **${cases.length}**\nRecent cases: ${cases.length?cases.map(c=>`#${c.id} ${c.action}`).join(", "):"None"}`);
+}, "Generate a JARVIS security investigation profile.");
+
+registerCommand("emergency", "Security", async message => {
+  if (!await requireAdmin(message)) return; const cfg=getConfig(message.guild.id); cfg.lockdown=true; cfg.antiRaid.enabled=true; cfg.antiRaid.lockdown=true; cfg.automod.enabled=true; saveConfig(message.guild.id,cfg); let changed=0;
+  for(const channel of message.guild.channels.cache.values()){if(!channel.isTextBased()||channel.isThread())continue; if(await channel.permissionOverwrites.edit(message.guild.roles.everyone,{SendMessages:false}).then(()=>true).catch(()=>false))changed++;}
+  const c=addCase(message.guild.id,{action:"EMERGENCY-LOCKDOWN",userId:message.author.id,moderatorId:client.user.id,reason:"Manual JARVIS emergency protocol"}); await logEvent(message.guild,`🚨 **JARVIS EMERGENCY PROTOCOL** activated by **${message.author.tag}** — ${changed} channels secured — Case #${c.id}`); return message.reply(`🚨 **Emergency protocol activated, sir.**\nSecured **${changed}** channels. AutoMod and Anti-Raid are now online. Case **#${c.id}** created.`);
+}, "Activate emergency security protocol and lockdown.");
+
+registerCommand("security", "Security", async message => {
+  if (!await requireAdmin(message)) return; const cfg=getConfig(message.guild.id); const recent=(cfg.cases||[]).filter(c=>String(c.action||"").includes("SECURITY")||String(c.action||"").includes("AUTOMOD")).slice(-10).reverse(); return message.reply(`🛡️ **JARVIS Security Status**\nAutoMod: **${cfg.automod.enabled?"ONLINE":"OFFLINE"}**\nAnti-Raid: **${cfg.antiRaid.enabled?"ONLINE":"OFFLINE"}**\nAnti-Nuke: **${cfg.security?.antiNuke!==false?"ONLINE":"OFFLINE"}**\nLockdown: **${cfg.lockdown?"ACTIVE":"CLEAR"}**\nRecent security cases: **${recent.length}**`);
+}, "Show the current JARVIS security posture.");
+
+registerCommand("analytics", "System", async message => {
+  if (!await requireAdmin(message)) return; const a=getAnalytics(message.guild.id); return message.reply(`📊 **JARVIS Analytics**\nMessages observed: **${a.totalMessages}**\nTop members: ${a.topUsers.length?a.topUsers.map(x=>`<@${x.userId}> — ${x.count}`).join(" · "):"No activity yet."}`);
+}, "Show persistent runtime analytics.");
+
+
+registerCommand("suggest", "Interaction", async (message,args) => {
+  if (!await requireAdmin(message)) return;
+  const text=args.join(" ").trim(); if(!text) return message.reply("❌ Provide a suggestion, sir.");
+  const ch=message.channel; const embed=new EmbedBuilder().setTitle("💡 JARVIS Suggestion").setDescription(text).addFields({name:"Author",value:`${message.author}`}).setTimestamp();
+  const sent=await ch.send({embeds:[embed]}); await sent.react("👍").catch(()=>{}); await sent.react("👎").catch(()=>{}); return message.reply("✅ Suggestion recorded, sir.");
+}, "Create a server suggestion with voting reactions.");
+
+registerCommand("ticket", "Interaction", async (message,args) => {
+  if (!await requireAdmin(message)) return;
+  const action=(args[0]||"create").toLowerCase();
+  if(action==="close"){if(!message.channel.name.startsWith("ticket-"))return message.reply("❌ This channel is not a JARVIS ticket.");await message.channel.delete("JARVIS ticket closed").catch(()=>{});return;}
+  const name=(args.slice(1).join("-")||message.author.username).toLowerCase().replace(/[^a-z0-9-]/g,"-").slice(0,60);
+  const ch=await message.guild.channels.create({name:`ticket-${name}`,type:ChannelType.GuildText,parent:getConfig(message.guild.id).ticketCategoryId||null,permissionOverwrites:[{id:message.guild.roles.everyone.id,deny:[PermissionsBitField.Flags.ViewChannel]},{id:message.author.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory]},{id:message.guild.members.me.id,allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages,PermissionsBitField.Flags.ReadMessageHistory]}]}).catch(()=>null);
+  return message.reply(ch?`🎫 Ticket created: ${ch}`:"❌ I couldn't create the ticket, sir.");
+}, "Create or close a simple support ticket.");
+
+registerCommand("level", "Interaction", async message => { if(!await requireAdmin(message))return; const a=getAnalytics(message.guild.id); const row=a.topUsers.find(x=>x.userId===message.author.id); return message.reply(`⭐ **JARVIS Activity Level**\nYour observed messages: **${row?.count||0}**\nRank: **${a.topUsers.findIndex(x=>x.userId===message.author.id)+1||'Unranked'}**`); }, "Show your activity level.");
+registerCommand("leaderboard", "Interaction", async message => { if(!await requireAdmin(message))return; const a=getAnalytics(message.guild.id); return message.reply(`🏆 **JARVIS Activity Leaderboard**\n${a.topUsers.map((x,i)=>`${i+1}. <@${x.userId}> — ${x.count}`).join("\n")||"No activity yet."}`); }, "Show the activity leaderboard.");
+registerCommand("rep", "Interaction", async (message,args) => { if(!await requireAdmin(message))return; const target=message.mentions.users.first(); if(!target)return message.reply("❌ Mention a member, sir."); const cfg=getConfig(message.guild.id); cfg.rep??={}; cfg.rep[target.id]=(cfg.rep[target.id]||0)+1; saveConfig(message.guild.id,cfg); return message.reply(`⭐ ${target} now has **${cfg.rep[target.id]}** JARVIS reputation.`); }, "Give a member reputation.");
+registerCommand("birthday", "Interaction", async (message,args) => { if(!await requireAdmin(message))return; const date=args[0]; if(!/^\d{2}-\d{2}$/.test(date||""))return message.reply("❌ Use `jarvis birthday DD-MM`."); const cfg=getConfig(message.guild.id); cfg.birthdays??={}; cfg.birthdays[message.author.id]=date; saveConfig(message.guild.id,cfg); return message.reply(`🎂 Birthday saved as **${date}**, sir.`); }, "Save your birthday date.");
+registerCommand("giveaway", "Interaction", async (message,args) => { if(!await requireAdmin(message))return; const seconds=Math.max(10,Number(args[0])||60); const prize=args.slice(1).join(" ")||"a mystery prize"; const sent=await message.channel.send(`🎉 **JARVIS GIVEAWAY**\nPrize: **${prize}**\nReact with 🎉 within **${seconds}s** to enter.`); await sent.react("🎉").catch(()=>{}); setTimeout(async()=>{const fresh=await sent.fetch().catch(()=>null);const reaction=fresh?.reactions.cache.get("🎉");const users=reaction?await reaction.users.fetch():new Map();const entrants=[...users.values()].filter(u=>!u.bot);const winner=entrants[Math.floor(Math.random()*entrants.length)];await message.channel.send(winner?`🏆 Congratulations ${winner}! You won **${prize}**.`:`No valid entrants for **${prize}**, sir.`).catch(()=>{});},seconds*1000); return message.reply("🎉 Giveaway launched, sir."); }, "Launch a reaction-based giveaway.");
 
 // ============================================================
 // HELPERS
@@ -3412,7 +3501,7 @@ client.once(
     console.log("");
 
     startScheduler(client,getConfig);
-    startDashboard(client,getConfig);
+    startDashboard(client,getConfig,getAnalytics);
 
     bot.user.setPresence({
       activities: [
@@ -3454,24 +3543,18 @@ client.on(
       });
     }
 
-    const command =
-      client.commands.get(
-        interaction.commandName
-      );
+    const command = client.commands.get(interaction.commandName);
+    const dynamic = textCommands[interaction.commandName];
+    const reserved = new Set([...client.commands.keys()]);
 
-    if (!command) return;
+    if (!command && !dynamic) return;
 
     try {
-
-      await command.execute(
-        interaction,
-        {
-          getConfig,
-          saveConfig,
-          addCase,
-          logEvent
-        }
-      );
+      if (command) {
+        await command.execute(interaction,{getConfig,saveConfig,addCase,logEvent});
+      } else {
+        await executeDynamic(interaction,dynamic);
+      }
 
     } catch (error) {
 
@@ -4032,6 +4115,14 @@ process.on(
 // LOGIN
 // ============================================================
 
-client.login(
-  process.env.DISCORD_TOKEN
-);
+function getDynamicSlashCommands() {
+  const reserved = new Set(client.commands.keys());
+  // Keep /emergency under the richer /jarvis command tree to stay within Discord's 100-command limit.
+  return buildDynamicDefinitions(textCommands, reserved, new Set(["emergency","insult","reverse","random","hug","slap","pat","compliment","rate","suggest","ticket","level","leaderboard","rep","birthday","giveaway"]));
+}
+
+module.exports = { client, textCommands, getDynamicSlashCommands, getConfig, saveConfig, addCase, logEvent };
+
+if (String(process.env.DEPLOY_ONLY || "false").toLowerCase() !== "true") {
+  client.login(process.env.DISCORD_TOKEN);
+}

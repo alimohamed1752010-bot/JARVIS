@@ -1,16 +1,4 @@
-const fs=require('node:fs'); const path=require('node:path');
-function startScheduler(client,getConfig){
-  setInterval(async()=>{
-    for(const guild of client.guilds.cache.values()){
-      const config=getConfig(guild.id); const brief=config.ai?.dailyBriefing;
-      if(!brief?.enabled || !brief.channelId) continue;
-      const key=`${guild.id}:${new Date().toISOString().slice(0,10)}`;
-      if(global.__jarvisBriefing===key) continue;
-      const hour=new Date().getHours(); if(hour!==Number(brief.hour??9)) continue;
-      global.__jarvisBriefing=key;
-      const ch=guild.channels.cache.get(brief.channelId); if(!ch?.isTextBased()) continue;
-      await ch.send(`**Good morning, sir.**\nJARVIS daily briefing for **${guild.name}**.\nMembers: **${guild.memberCount}**\nChannels: **${guild.channels.cache.size}**\nSecurity systems: **${config.automod?.enabled?'AutoMod ON':'AutoMod OFF'} / ${config.antiRaid?.enabled?'Anti-Raid ON':'Anti-Raid OFF'}**`).catch(()=>{});
-    }
-  },60000);
-}
+function cairoHour(){return Number(new Intl.DateTimeFormat('en-US',{timeZone:'Africa/Cairo',hour:'2-digit',hour12:false}).format(new Date()));}
+function cairoDate(){return new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());}
+function startScheduler(client,getConfig){setInterval(async()=>{for(const guild of client.guilds.cache.values()){const config=getConfig(guild.id);const brief=config.ai?.dailyBriefing;if(!brief?.enabled||!brief.channelId)continue;const key=`${guild.id}:${cairoDate()}`;global.__jarvisBriefings??=new Set();if(global.__jarvisBriefings.has(key))continue;if(cairoHour()!==Number(brief.hour??9))continue;const ch=guild.channels.cache.get(brief.channelId);if(!ch?.isTextBased()){global.__jarvisBriefings.add(key);continue;}global.__jarvisBriefings.add(key);const warnings=Object.values(config.warnings||{}).reduce((n,x)=>n+x.length,0);await ch.send(`**Good morning, sir.** ☀️\n\n**JARVIS Daily Intelligence Briefing — ${guild.name}**\n• Members: **${guild.memberCount}**\n• Channels: **${guild.channels.cache.size}**\n• Moderation cases: **${config.cases?.length||0}**\n• Warnings: **${warnings}**\n• AutoMod: **${config.automod?.enabled?'ONLINE':'OFFLINE'}**\n• Anti-Raid: **${config.antiRaid?.enabled?'ONLINE':'OFFLINE'}**\n• Lockdown: **${config.lockdown?'ACTIVE':'CLEAR'}**`).catch(()=>{});}},60000);}
 module.exports={startScheduler};

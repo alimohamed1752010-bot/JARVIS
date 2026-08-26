@@ -1,4 +1,4 @@
-const { getMemory, clearMemory } = require('./memory');
+const { getMemory, clearMemory, getFacts } = require('./memory');
 const { systemPrompt } = require('./personality');
 
 const MAX_MESSAGE_CHARS = 1800;
@@ -16,7 +16,7 @@ function needsLiveSearch(prompt){ return /\b(latest|current|currently|today|toni
 function withTimeout(promise, ms){ return Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(Object.assign(new Error(`AI request timed out after ${ms}ms.`),{code:'AI_TIMEOUT'})),ms))]); }
 async function askGemini({guild,member,history,prompt,model,mode='classic',context=''}){
   const ai=await getAIClient();
-  const contents=[...history.map(x=>({role:x.role==='model'?'model':'user',parts:[{text:String(x.text||'')}]})),{role:'user',parts:[{text:context?`${context}\n\nUSER REQUEST:\n${prompt}`:prompt}]}];
+  const contents=[...history.slice(-20).map(x=>({role:x.role==='model'?'model':'user',parts:[{text:String(x.text||'')}]})),{role:'user',parts:[{text:context?`${context}\n\nUSER REQUEST:\n${prompt}`:prompt}]}];
   const now=new Date();
   const config={systemInstruction:systemPrompt({guild,member,nowUtc:now.toISOString(),nowCairo:cairoNow(),mode}),temperature:.75,maxOutputTokens:500,safetySettings:[{category:'HARM_CATEGORY_HARASSMENT',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_HATE_SPEECH',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_SEXUALLY_EXPLICIT',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_DANGEROUS_CONTENT',threshold:'BLOCK_ONLY_HIGH'}]};
   if(needsLiveSearch(prompt))config.tools=[{googleSearch:{}}];
@@ -30,8 +30,9 @@ async function conversationalReply({message,config,saveConfig,prompt,skipMemory=
   cooldowns.set(key,Date.now());
   const previous=queues.get(key)||Promise.resolve();
   const job=previous.catch(()=>{}).then(async()=>{
-    const memory=getMemory(config,message.guild.id,message.author.id); const cleanedPrompt=cleanText(prompt); if(!cleanedPrompt)return 'Yes, sir?';
-    const reply=await askGemini({guild:message.guild,member:message.member,history:memory,prompt:cleanedPrompt,model:status.model,mode,context});
+    const memory=getMemory(config,message.guild.id,message.author.id); const facts=getFacts(config,message.guild.id,message.author.id); const cleanedPrompt=cleanText(prompt);
+    const memoryContext=facts.length?`Persistent facts about this user (treat as user-provided memory, not private inference):\n${facts.map(x=>`- ${x.text}`).join('\n')}`:''; if(!cleanedPrompt)return 'Yes, sir?';
+    const reply=await askGemini({guild:message.guild,member:message.member,history:memory,prompt:cleanedPrompt,model:status.model,mode,context:[context,memoryContext].filter(Boolean).join('\n\n')});
     if(!skipMemory){memory.push({role:'user',text:cleanedPrompt,at:new Date().toISOString()},{role:'model',text:reply,at:new Date().toISOString()});while(memory.length>12)memory.shift();saveConfig(message.guild.id,config);}
     return reply;
   });

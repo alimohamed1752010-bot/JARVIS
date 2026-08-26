@@ -1,4 +1,4 @@
-# JARVIS — Ultimate Discord Server Assistant
+# JARVIS V6 — Ultimate Discord Server Assistant
 
 JARVIS is an administrator-only Discord server management bot built with Node.js and discord.js. This version keeps the original moderation, welcome, logging, utility, information, fun, interaction, and conversational features while adding a much larger security and management layer.
 
@@ -164,3 +164,25 @@ JARVIS now has a controlled live-Discord assistant layer. Owner prompts can dire
 - `jarvis briefing`
 
 Dangerous natural-language moderation requests still require explicit confirmation and are protected from acting on the master/server owner.
+
+
+## V6 upgrades
+
+- Unified command engine: the large `jarvis <command>` library is automatically mirrored into slash commands using the same handler, so behavior stays consistent.
+- 99 top-level slash commands are deployed safely under Discord's application-command limit.
+- `/jarvis` is now the JARVIS command center with security, memory, analytics, emergency protocol, briefing and dashboard controls.
+- `/jarvis fun ...` mirrors low-priority interaction commands that are grouped to keep the bot under Discord's 100-command limit.
+- `/jarvis community ...` provides suggestions, tickets, reputation, activity, birthdays and giveaways.
+- Long-term AI facts plus a larger 30-day conversation memory window.
+- AI tools: `jarvis ask`, `jarvis summarize`, `jarvis investigate`.
+- Emergency protocol enables lockdown, AutoMod and Anti-Raid together and records a case.
+- JARVIS Command Center dashboard with authenticated session access.
+- Daily briefings use Africa/Cairo time.
+
+### Slash command parity
+
+Run `npm run deploy` after setting `DISCORD_TOKEN`, `CLIENT_ID`, and optionally `GUILD_ID`. Every text command with a top-level slash equivalent accepts an `args` field using the same argument syntax as the message command. Hand-crafted commands such as `/ban`, `/timeout`, `/avatar`, `/ask`, `/summarize`, `/investigate`, and `/jarvis` have richer Discord options.
+
+### Railway dashboard
+
+Set `DASHBOARD_ENABLED=true` and a strong `DASHBOARD_TOKEN`. The dashboard listens on Railway's `PORT`. Open the service URL once with `?token=YOUR_DASHBOARD_TOKEN`; JARVIS then issues a short-lived HttpOnly session cookie.
