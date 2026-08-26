@@ -9,7 +9,7 @@ Set these in Railway → Variables:
 ```env
 AI_ENABLED=true
 GEMINI_API_KEY=your_real_key_here
-GEMINI_MODEL=gemini-3.6-flash
+GEMINI_MODEL=gemini-3.5-flash-lite
 JARVIS_OWNER_ID=797626962494488636
 ```
 
@@ -20,7 +20,7 @@ Do not commit `.env` or your real API key.
 When JARVIS starts, Railway should show something like:
 
 ```text
-[AI CONFIG] enabled=true configured=true model=gemini-3.6-flash key=API key
+[AI CONFIG] enabled=true configured=true model=gemini-3.5-flash-lite key=API key
 ```
 
 The key itself is never printed.

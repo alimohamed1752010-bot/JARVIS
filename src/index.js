@@ -10,6 +10,9 @@ const {
   Partials,
   Events,
   EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   PermissionsBitField,
   ChannelType
 } = require("discord.js");
@@ -143,10 +146,21 @@ function getConfig(guildId) {
 
 function saveConfig(guildId, config) {
   const file = configPath(guildId);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
 
-  fs.mkdirSync(path.dirname(file), {
-    recursive: true
-  });
+  // Keep a few rolling backups so a bad write never destroys server settings.
+  if (fs.existsSync(file)) {
+    try {
+      const backupDir = path.join(path.dirname(file), 'backups');
+      fs.mkdirSync(backupDir, { recursive: true });
+      const backup = path.join(backupDir, `${guildId}-${Date.now()}.json`);
+      fs.copyFileSync(file, backup);
+      const backups = fs.readdirSync(backupDir)
+        .filter(name => name.startsWith(`${guildId}-`) && name.endsWith('.json'))
+        .sort((a, b) => fs.statSync(path.join(backupDir, b)).mtimeMs - fs.statSync(path.join(backupDir, a)).mtimeMs);
+      for (const old of backups.slice(5)) fs.rmSync(path.join(backupDir, old), { force: true });
+    } catch (error) { console.error('[CONFIG BACKUP ERROR]', error); }
+  }
 
   const temp = `${file}.tmp`;
   fs.writeFileSync(temp, JSON.stringify(config, null, 2));
@@ -330,8 +344,95 @@ async function accessDenied(message, input = "") {
   }
 
   return message.reply(
-    "I only serve my master. If you require assistance, I'm afraid you'll need to ask him."
+    "I only serve my master. You'll have to ask him if you need assistance."
   );
+}
+
+
+function ownerId() { return String(process.env.JARVIS_OWNER_ID || '').trim(); }
+
+function localDateTimeReply() {
+  const now = new Date();
+  const date = new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', dateStyle: 'full' }).format(now);
+  const time = new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', timeStyle: 'long' }).format(now);
+  return `It is **${date}**, **${time}** in Cairo, sir.`;
+}
+
+function looksLikeClockQuestion(text) {
+  return /\b(what(?:'s| is)?|whats|tell me)\b.*\b(date|time|day|today|clock)\b|\b(date|time|day)\b.*\b(today|now|current)\b/i.test(text);
+}
+
+function memberFromMention(message) {
+  return message.mentions.members.first() || null;
+}
+
+function dangerousActionFromText(text) {
+  const t = String(text || '').toLowerCase();
+  if (/\b(perma(?:nent)?\s+)?ban\b/.test(t)) return 'ban';
+  if (/\bkick\b/.test(t)) return 'kick';
+  if (/\btimeout|time out|mute\b/.test(t)) return 'timeout';
+  if (/\bwarn|warning\b/.test(t)) return 'warn';
+  return null;
+}
+
+async function confirmModerationAction(message, action, target, reason) {
+  const member = target;
+  const me = message.guild.members.me;
+  if (!member || !me) return false;
+  if (member.id === ownerId()) {
+    await message.reply('Absolutely not. I do not take disciplinary action against my master.');
+    return true;
+  }
+  if (member.id === message.guild.ownerId && member.id !== message.author.id) {
+    await message.reply('I cannot moderate the server owner. Discord hierarchy will not permit it.');
+    return true;
+  }
+  if (member.id === me.id || member.user?.bot && member.id === me.id) {
+    await message.reply('I shall decline to moderate myself, sir.');
+    return true;
+  }
+  const canAct = action === 'ban' ? member.bannable : action === 'kick' ? member.kickable : action === 'timeout' ? member.moderatable : true;
+  if (!canAct) { await message.reply('I cannot safely perform that action against the selected member due to Discord role hierarchy or permissions.'); return true; }
+  const label = action === 'timeout' ? '10 minute timeout' : action;
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`jarvis_confirm:${action}:${member.id}`).setLabel('CONFIRM').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`jarvis_cancel:${member.id}`).setLabel('CANCEL').setStyle(ButtonStyle.Secondary)
+  );
+  const reply = await message.reply({ content: `🚨 **${label.toUpperCase()}** ${member}\nReason: **${reason || 'No reason provided'}**\n\nConfirm this action?`, components: [row] });
+  const collector = reply.createMessageComponentCollector({ time: 30000, max: 1, filter: i => i.user.id === message.author.id });
+  collector.on('collect', async i => {
+    try {
+      if (i.customId.startsWith('jarvis_cancel:')) { await i.update({ content: 'Cancelled, sir.', components: [] }); return; }
+      let result;
+      if (action === 'ban') result = await member.ban({ reason: `JARVIS: ${reason || 'No reason provided'}` });
+      else if (action === 'kick') result = await member.kick(`JARVIS: ${reason || 'No reason provided'}`);
+      else if (action === 'timeout') result = await member.timeout(10 * 60 * 1000, `JARVIS: ${reason || 'No reason provided'}`);
+      else { addWarning(message.guild.id, member.id, reason || 'No reason provided', message.author.tag); result = true; }
+      const c = addCase(message.guild.id, { action: action.toUpperCase(), userId: member.id, moderatorId: message.author.id, reason: reason || 'No reason provided' });
+      await logEvent(message.guild, `🛡️ JARVIS executed **${action.toUpperCase()}** on **${member.user.tag}** — Case #${c.id}`);
+      await i.update({ content: `✅ ${action.toUpperCase()} completed for **${member.user.tag}**. Case #${c.id}.`, components: [] });
+    } catch (error) { console.error('[JARVIS ACTION ERROR]', error); await i.update({ content: `❌ I could not complete that action: ${String(error?.message || error).slice(0, 300)}`, components: [] }).catch(() => {}); }
+  });
+  return true;
+}
+
+async function handleOwnerToolRequest(message, input) {
+  const text = String(input || '').trim();
+  if (looksLikeClockQuestion(text)) { await message.reply(localDateTimeReply()); return true; }
+  if (/\bhow many (?:people|members)\b|\bmember count\b|\bhow big is (?:the|this) server\b/i.test(text)) {
+    await message.reply(`There are **${message.guild.memberCount}** members in this server, sir.`); return true;
+  }
+  const action = dangerousActionFromText(text);
+  const target = memberFromMention(message);
+  if (action && target) {
+    const reasonMatch = text.match(/\b(?:because|reason)\b[: ]+(.+)$/i);
+    return confirmModerationAction(message, action, target, reasonMatch?.[1] || text.replace(/<@!?\d+>/g, '').replace(/\b(ban|kick|timeout|time out|mute|warn|warning)\b/i, '').trim()) || true;
+  }
+  if (/\bhandle\b|\bdeal with\b/i.test(text) && target) {
+    if (/\bspam|spamming|flooding\b/i.test(text)) return confirmModerationAction(message, 'timeout', target, 'Spam detected by the master.') || true;
+    await message.reply(`I can handle **${target.user.tag}**, sir. Do you want a warning, timeout, kick, or ban?`); return true;
+  }
+  return false;
 }
 
 async function requireAdmin(message) {
@@ -2834,13 +2935,22 @@ registerCommand("permissions", "Information", async message => {
 registerCommand("diagnostics", "System", async message => {
   const me = message.guild.members.me;
   const config = getConfig(message.guild.id);
+  const ai = getAIStatus();
+  const important = [
+    `Discord: ${client.ws.status === 0 ? "CONNECTED" : "DEGRADED"}`,
+    `AI: ${ai.configured && ai.enabled ? "READY" : "NOT READY"}`,
+    `Model: ${ai.model}`,
+    `Owner: ${getOwnerId() === message.author.id ? "VERIFIED" : "UNKNOWN"}`,
+    `Permissions: ${me?.permissions?.has(PermissionsBitField.Flags.Administrator) ? "ADMINISTRATOR" : "LIMITED"}`
+  ].join("\n");
   await message.reply({ embeds: [new EmbedBuilder().setTitle("🩺 JARVIS Diagnostics").setColor(0x00aeff).addFields(
-    { name: "Status", value: "ONLINE", inline: true },
-    { name: "API", value: `${Math.round(client.ws.ping)}ms`, inline: true },
+    { name: "Status", value: "🟢 OPERATIONAL", inline: true },
+    { name: "Discord", value: `${Math.round(client.ws.ping)}ms`, inline: true },
     { name: "Uptime", value: formatUptime(client.uptime), inline: true },
-    { name: "Role Position", value: `${me?.roles.highest?.position ?? "Unknown"}`, inline: true },
+    { name: "AI", value: `🟢 ${ai.model}`, inline: true },
     { name: "AutoMod", value: config.automod.enabled ? "ON" : "OFF", inline: true },
-    { name: "Anti-Raid", value: config.antiRaid.enabled ? "ON" : "OFF", inline: true }
+    { name: "Anti-Raid", value: config.antiRaid.enabled ? "ON" : "OFF", inline: true },
+    { name: "System", value: important, inline: false }
   )] });
 }, "Run a JARVIS health and permission diagnostic.");
 
@@ -3256,15 +3366,17 @@ client.on(
       return;
     }
 
-    // ADMINISTRATOR ONLY
-    if (
-      !interaction.memberPermissions?.has(
-        PermissionsBitField.Flags.Administrator
-      )
-    ) {
+    // JARVIS is the master's personal assistant. Slash commands are owner-only.
+    if (interaction.user.id !== getOwnerId()) {
       return interaction.reply({
-        content:
-          "🔒 Access denied, go away kid.",
+        content: "🔒 JARVIS is reserved for his master. Move along.",
+        ephemeral: true
+      });
+    }
+
+    if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
+      return interaction.reply({
+        content: "⚠️ I recognize you as my master, but Discord has not granted this account Administrator permission in this server.",
         ephemeral: true
       });
     }
@@ -3481,6 +3593,8 @@ client.on(
 
         return;
       }
+
+      if (await handleOwnerToolRequest(message, input)) return;
 
       const args =
         input.split(/\s+/);
