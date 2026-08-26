@@ -43,6 +43,10 @@ const { inspectAudit } = require("./systems/security");
 const { startScheduler } = require("./systems/scheduler");
 const { startDashboard } = require("./dashboard");
 
+// Railway/container-safe startup: make the persistent data directory before any guild config is read.
+const DATA_DIR = path.join(__dirname, "..", "data");
+fs.mkdirSync(DATA_DIR, { recursive: true });
+
 // ============================================================
 // AI DIAGNOSTICS
 // ============================================================
@@ -87,7 +91,7 @@ client.on("shardReconnecting", id => {
 // ============================================================
 
 function configPath(guildId) {
-  return path.join(__dirname, "..", "data", `${guildId}.json`);
+  return path.join(DATA_DIR, `${guildId}.json`);
 }
 
 function defaultConfig() {
@@ -3119,7 +3123,7 @@ registerCommand("report", "System", async message => {
     warnings: Object.values(config.warnings || {}).reduce((n, x) => n + x.length, 0),
     automod: config.automod.enabled, antiRaid: config.antiRaid.enabled
   };
-  const file = path.join(__dirname, "..", "data", `${message.guild.id}-report-${Date.now()}.json`);
+  const file = path.join(DATA_DIR, `${message.guild.id}-report-${Date.now()}.json`);
   fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(report, null, 2));
   await message.reply(`📄 Server report generated. **${report.cases}** cases and **${report.warnings}** warnings recorded.`);
 }, "Generate a server report file.");
@@ -4030,6 +4034,8 @@ process.on(
 // LOGIN
 // ============================================================
 
-client.login(
-  process.env.DISCORD_TOKEN
-);
+client.login(process.env.DISCORD_TOKEN).catch(error => {
+  console.error("[LOGIN FAILED]", error?.message || error);
+  console.error("[LOGIN CHECK] Verify DISCORD_TOKEN is set in Railway Variables and is the bot token, not the client secret.");
+  process.exitCode = 1;
+});
