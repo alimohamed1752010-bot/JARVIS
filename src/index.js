@@ -32,6 +32,7 @@ client.commands = new Collection();
 
 const afkStore = new Map();
 const reminders = new Map();
+const { conversationalReply, clearMemory } = require("./ai");
 
 // ============================================================
 // TOKEN
@@ -103,7 +104,10 @@ function defaultConfig() {
     cases: [],
     customCommands: {},
     reminders: [],
-    warnings: {}
+    warnings: {},
+    ai: {
+      memory: {}
+    }
   };
 }
 
@@ -169,6 +173,8 @@ function normalizeConfig(config) {
   config.cases ??= [];
   config.customCommands ??= {};
   config.reminders ??= [];
+  config.ai ??= {};
+  config.ai.memory ??= {};
   return config;
 }
 
@@ -3389,6 +3395,26 @@ client.on(
         return;
       }
 
+      try {
+        const aiReply = await conversationalReply({
+          message,
+          config,
+          saveConfig,
+          prompt: input
+        });
+
+        if (aiReply) {
+          await message.reply({ content: aiReply.slice(0, 1900) });
+          return;
+        }
+      } catch (error) {
+        console.error("[AI ERROR]", error);
+        await message.reply(
+          "⚠️ My conversational systems are unavailable right now, sir. Check GEMINI_API_KEY and the AI configuration."
+        );
+        return;
+      }
+
       await message.reply(
         `I don't recognize **${commandName}**, sir.\nTry \`jarvis help\` for everything I can do.`
       );
@@ -3410,6 +3436,29 @@ client.on(
       await message.reply(
         autoReply
       );
+      return;
+    }
+
+    const prompt = rawContent.replace(/\bjarvis\b/ig, "").trim();
+
+    if (prompt) {
+      try {
+        const aiReply = await conversationalReply({
+          message,
+          config,
+          saveConfig,
+          prompt
+        });
+
+        if (aiReply) {
+          await message.reply({ content: aiReply.slice(0, 1900) });
+        }
+      } catch (error) {
+        console.error("[AI ERROR]", error);
+        await message.reply(
+          "⚠️ My conversational systems are unavailable right now, sir. Check GEMINI_API_KEY and the AI configuration."
+        );
+      }
     }
   }
 );
