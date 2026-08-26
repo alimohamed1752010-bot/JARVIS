@@ -3419,8 +3419,21 @@ client.on(
         }
       } catch (error) {
         console.error("[AI ERROR]", error);
+        const status = Number(error?.status || error?.statusCode || 0);
+        const errorText = String(error?.message || error || "").toLowerCase();
+        const temporaryAIError =
+          status === 429 ||
+          status === 503 ||
+          errorText.includes("status=429") ||
+          errorText.includes("status=503") ||
+          errorText.includes("high demand") ||
+          errorText.includes("temporarily unavailable") ||
+          errorText.includes("unavailable");
+
         await message.reply(
-          "⚠️ My conversational systems are unavailable right now, sir. Check GEMINI_API_KEY and the AI configuration."
+          temporaryAIError
+            ? "⚠️ AI DataBase is being a little busy at the moment, sir. Give me a second."
+            : "⚠️ My conversational systems are unavailable right now, sir. Check GEMINI_API_KEY and the AI configuration."
         );
         return;
       }
@@ -3465,8 +3478,21 @@ client.on(
         }
       } catch (error) {
         console.error("[AI ERROR]", error);
+        const status = Number(error?.status || error?.statusCode || 0);
+        const errorText = String(error?.message || error || "").toLowerCase();
+        const temporaryAIError =
+          status === 429 ||
+          status === 503 ||
+          errorText.includes("status=429") ||
+          errorText.includes("status=503") ||
+          errorText.includes("high demand") ||
+          errorText.includes("temporarily unavailable") ||
+          errorText.includes("unavailable");
+
         await message.reply(
-          "⚠️ My conversational systems are unavailable right now, sir. Check GEMINI_API_KEY and the AI configuration."
+          temporaryAIError
+            ? "⚠️ AI DataBase is being a little busy at the moment, sir. Give me a second."
+            : "⚠️ My conversational systems are unavailable right now, sir. Check GEMINI_API_KEY and the AI configuration."
         );
       }
     }
