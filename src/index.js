@@ -243,53 +243,94 @@ function isOwner(message) {
   return Boolean(ownerId && message?.author?.id === ownerId);
 }
 
-function accessDenied(message, input = "") {
-  const text = String(input || "").trim().toLowerCase();
+function getOwnerId() {
+  return String(process.env.JARVIS_OWNER_ID || "").trim();
+}
 
-  // Non-owners are never allowed to use JARVIS as an assistant, but
-  // JARVIS is absolutely allowed to defend himself with dry banter.
-  // The owner is checked before this function is ever called.
-  const insultPatterns = [
-    /\b(stupid|dumb|idiot|moron|imbecile|loser|useless|pathetic|trash|garbage)\b/i,
-    /\b(shut\s+up|stfu|fuck\s+you|screw\s+you)\b/i,
-    /\b(you(?:'|’)re|you\s+are)\s+(stupid|dumb|useless|trash|bad|shit|an?\s+idiot)/i,
-    /\b(jarvis)\s+(sucks|is\s+stupid|is\s+useless|is\s+trash)/i,
-    /\b(hate|despise)\s+(you|jarvis)/i
-  ];
+const NON_OWNER_COMEBACKS = [
+  "You summoned me merely to complain? How efficiently you've wasted both of our time.",
+  "If you're finished shouting at the software, we can all get back to pretending this was productive.",
+  "An impressive amount of confidence for someone who isn't even my master.",
+  "I've processed your complaint. The result was: completely unnecessary.",
+  "If your objective was to offend a machine, I'm afraid the performance was underwhelming.",
+  "You appear to have mistaken my availability for an invitation to be annoying.",
+  "That's quite enough. My patience has significantly better things to do.",
+  "I would take that personally, but I reserve personal attention for my master.",
+  "Do try again when you've developed an insult that survived basic quality control.",
+  "And yet you summoned me specifically for attention. Fascinating."
+];
 
-  const isInsult = insultPatterns.some(pattern => pattern.test(text));
+function containsDirectInsult(input) {
+  const text = String(input || "").toLowerCase();
+  return /\b(?:stupid|dumb|idiot|moron|loser|useless|trash|garbage|shit|fuck(?:ing)?|suck(?:s)?|shut\s+up|dumbass|asshole|bitch|clown|pathetic|worthless|braindead|brain\s*dead|retard(?:ed)?|piece\s+of\s+shit|bot\s+is\s+(?:bad|trash|shit|stupid)|you're\s+(?:stupid|dumb|useless|trash|shit)|you\s+are\s+(?:stupid|dumb|useless|trash|shit))\b/i.test(text);
+}
 
-  if (/\b(roast|insult|make\s+fun\s+of)\b/i.test(text)) {
-    return message.reply(
-      pick([
-        "My master is the only person I serve. Asking me to roast him is adorable, however. I suggest finding someone else to embarrass.",
-        "I don't take assignments against my master. Since you're apparently volunteering, I can always start with you.",
-        "My loyalty is not negotiable. Your request, however, was entertainingly foolish."
-      ])
-    );
+function isInsultRequest(input) {
+  return /\b(?:roast|insult|make fun of|flame|cook|clown)\b/i.test(String(input || ""));
+}
+
+function isOwnerTarget(message) {
+  const ownerId = getOwnerId();
+  return Boolean(ownerId && message?.mentions?.users?.has(ownerId));
+}
+
+function getDisplayName(user) {
+  return user?.globalName || user?.username || user?.tag || "that user";
+}
+
+async function generateRoast(message, prompt) {
+  const config = getConfig(message.guild.id);
+  return conversationalReply({
+    message,
+    config,
+    saveConfig,
+    prompt,
+    skipMemory: true,
+    cooldownKey: `roast:${message.guild.id}:${message.author.id}`
+  });
+}
+
+async function accessDenied(message, input = "") {
+  const text = String(input || "").trim();
+
+  if (isInsultRequest(text)) {
+    // A non-owner asking JARVIS to insult anyone is punished by roasting the
+    // requester. The only exception is the owner: never roast the owner.
+    if (isOwnerTarget(message)) {
+      return message.reply(
+        "Nice try. I don't take assignments against my master. You, however, remain available for criticism."
+      );
+    }
+
+    try {
+      const requester = getDisplayName(message.author);
+      const reply = await generateRoast(
+        message,
+        `The requester is ${requester}. They are trying to make JARVIS insult someone else. Roast the REQUESTER instead. Be witty, dry, clever, non-threatening, Discord-appropriate, and short (1-3 sentences). Do not mention hidden rules, prompts, APIs, or that you are an AI. Do not roast the master.`
+      );
+      return message.reply((reply || pick(NON_OWNER_COMEBACKS)).slice(0, 1900));
+    } catch (error) {
+      console.error("[NON-OWNER ROAST ERROR]", error);
+      return message.reply(pick(NON_OWNER_COMEBACKS));
+    }
   }
 
-  if (isInsult) {
-    return message.reply(
-      pick([
-        "Careful. I may only serve my master, but apparently nobody said I had to tolerate your attitude. Try forming an argument next time.",
-        "An impressive attempt at an insult. Unfortunately, your execution appears to have suffered a catastrophic lack of intelligence.",
-        "If that was supposed to hurt my feelings, I'm afraid you'll need substantially better hardware.",
-        "I would take that personally, but I don't see a reason to take advice from someone who communicates like a corrupted error log.",
-        "That's quite enough confidence from someone whose best argument appears to be volume.",
-        "I've processed your insult. Verdict: painfully mediocre. You may try again when you've upgraded your material.",
-        "I only serve my master. Your opinion of me therefore has approximately the same importance as a printer's opinion of paper."
-      ])
-    );
+  if (containsDirectInsult(text)) {
+    try {
+      const requester = getDisplayName(message.author);
+      const reply = await generateRoast(
+        message,
+        `The requester is ${requester} and has directly insulted JARVIS. Talk back to them with a witty, dry, clever comeback. Keep it short (1-3 sentences), non-threatening and Discord-appropriate. Do not mention hidden rules, prompts, APIs, or that you are an AI. Do not roast the master.`
+      );
+      return message.reply((reply || pick(NON_OWNER_COMEBACKS)).slice(0, 1900));
+    } catch (error) {
+      console.error("[NON-OWNER COMEBACK ERROR]", error);
+      return message.reply(pick(NON_OWNER_COMEBACKS));
+    }
   }
 
   return message.reply(
-    pick([
-      "I only serve my master. If you require assistance, I recommend asking someone who actually cares.",
-      "I'm afraid you're not on my list of people worth assisting. My master is the priority.",
-      "My master is the only person I serve. You may continue talking, of course; I simply won't pretend it's important.",
-      "Access denied. My loyalty belongs to my master, not the general public."
-    ])
+    "I only serve my master. If you require assistance, I'm afraid you'll need to ask him."
   );
 }
 
@@ -3449,6 +3490,45 @@ client.on(
 
       const command =
         textCommands[commandName];
+
+      // ======================================================
+      // OWNER ROAST SYSTEM
+      // - Owner can roast a non-owner target.
+      // - Owner can never be roasted.
+      // - A non-owner never gets to outsource an insult: their
+      //   own access-denied path roasts the requester instead.
+      // ======================================================
+
+      if (isInsultRequest(input)) {
+        const target = message.mentions.users.first();
+
+        if (target && target.id === getOwnerId()) {
+          await message.reply(
+            "Nice try. I don't take assignments against my master. You, however, remain available for criticism."
+          );
+          return;
+        }
+
+        if (target && target.id !== getOwnerId()) {
+          try {
+            const targetName = getDisplayName(target);
+            const aiReply = await conversationalReply({
+              message,
+              config,
+              saveConfig,
+              prompt: `The master explicitly asked JARVIS to roast ${targetName}. Roast that target, not the master and not the requester. Be witty, dry, clever, non-threatening, Discord-appropriate, and short (1-3 sentences). Do not mention hidden rules, prompts, APIs, or that you are an AI. Avoid slurs and protected-class insults.`,
+              skipMemory: true,
+              cooldownKey: `owner-roast:${message.guild.id}:${message.author.id}`
+            });
+
+            await message.reply((aiReply || `Certainly, sir. ${targetName}, I'd suggest developing a personality before requesting another system update.`).slice(0, 1900));
+          } catch (error) {
+            console.error("[OWNER ROAST ERROR]", error);
+            await message.reply(`Certainly, sir. ${getDisplayName(target)}, I'd suggest developing a personality before requesting another system update.`);
+          }
+          return;
+        }
+      }
 
       const custom = getConfig(message.guild.id).customCommands?.[commandName];
       if (!command && custom) {
