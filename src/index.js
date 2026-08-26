@@ -3102,7 +3102,7 @@ client.once(
       activities: [
         {
           name:
-            "jarvis help | administrators only",
+            "Anything For Your Mr. Stark.",
           type: 3
         }
       ],
