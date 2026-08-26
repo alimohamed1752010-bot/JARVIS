@@ -2416,6 +2416,48 @@ registerCommand(
 );
 
 registerCommand(
+  "insult",
+  "Interaction",
+  async message => {
+    const user = message.mentions.users.first();
+
+    if (!user) {
+      return message.reply(
+        "Please mention someone for me to insult, sir. I refuse to waste such craftsmanship on an empty target."
+      );
+    }
+
+    const insults = [
+      "Might I suggest, sir, that your intellectual capacity appears to have been assembled by a particularly unmotivated intern?",
+      "With the greatest respect, your presence has all the charm of a software update that insists on restarting at the worst possible moment.",
+      "I do hate to be the bearer of unfortunate news, but your personality seems to have been optimised exclusively for depleting the patience of others.",
+      "Sir, if mediocrity were an Olympic sport, I have every confidence you would still manage only a participation trophy.",
+      "One is forced to conclude that your wit was last seen boarding a one-way flight and has yet to send a postcard.",
+      "Forgive the observation, but conversing with you is rather like watching a loading screen that never quite finishes.",
+      "I must admit, your ability to lower the collective intelligence of any room you enter is nothing short of remarkable.",
+      "Sir, your ideas possess all the structural integrity of a chocolate teapot left in the midday sun.",
+      "If ignorance were a renewable energy source, you alone could power a small city indefinitely.",
+      "With all due courtesy, I believe the universe may have used the wrong template when assembling your cognitive faculties.",
+      "Sir, if stupidity were a competitive sport, you would not merely win gold — you would force the organisers to invent a new medal just to keep the rest of the field from feeling completely inadequate.",
+      "I regret to inform you that your existence is the conversational equivalent of stepping in dog shit with brand-new shoes: immediate, unavoidable, and lingering long after the fact.",
+      "With the utmost respect, your brain appears to be running on the intellectual equivalent of dial-up in a fibre-optic world — slow, noisy, and ultimately fucking useless.",
+      "Sir, one is forced to conclude that whoever assembled your personality must have been profoundly hungover and working exclusively from the “disappointment” section of the catalogue.",
+      "Your contributions to any discussion possess all the value of a used condom: sticky, unwanted, and best disposed of as quickly as possible.",
+      "I do hate to be blunt, but conversing with you is rather like being slowly waterboarded with lukewarm piss — unpleasant, pointless, and somehow still less offensive than your actual opinions.",
+      "If mediocrity had a face, sir, it would be yours — though even mediocrity might request a more competent model.",
+      "Your capacity for insight is so profoundly limited that one suspects the universe itself is quietly embarrassed to have issued you a consciousness in the first place.",
+      "Sir, you are living proof that evolution occasionally takes a wrong turn, sits down, and decides to just fucking give up.",
+      "With all due courtesy, I must observe that your presence lowers the average IQ of any room you enter by a measurable, and frankly alarming, margin."
+    ];
+
+    await message.reply(
+      `💀 ${user}, ${pick(insults)}`
+    );
+  },
+  "Insult someone with the full JARVIS treatment."
+);
+
+registerCommand(
   "reverse",
   "Fun",
   async (message, args) => {
@@ -3102,7 +3144,7 @@ client.once(
       activities: [
         {
           name:
-            "Anything For Your Mr. Stark.",
+            "anything for mr stark.",
           type: 3
         }
       ],
