@@ -1,7 +1,7 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "6.0.0",
-  "description": "JARVIS V6 Ultimate Discord server assistant with unified message/slash commands, AI memory, security, analytics and dashboard.",
+  "version": "7.0.0",
+  "description": "JARVIS V7 Ultimate Discord server assistant with unified message/slash commands, AI memory, security, analytics and dashboard.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

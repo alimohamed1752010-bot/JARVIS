@@ -432,24 +432,53 @@ async function generateRoast(message, prompt) {
   });
 }
 
+function getInsultTarget(message, text) {
+  // Explicit Discord mention wins: JARVIS knows exactly who the requester means.
+  const mentioned = message.mentions?.users?.first();
+  if (mentioned) return {
+    user: mentioned,
+    name: getDisplayName(mentioned),
+    explicit: true
+  };
+
+  // With no mention, the natural target of an unauthorized "insult X" request
+  // is the person who summoned JARVIS. This keeps the behavior personal rather
+  // than relying on a static comeback.
+  return {
+    user: message.author,
+    name: getDisplayName(message.author),
+    explicit: false
+  };
+}
+
 async function accessDenied(message, input = "") {
   const text = String(input || "").trim();
 
   if (isInsultRequest(text)) {
-    // A non-owner asking JARVIS to insult anyone is punished by roasting the
-    // requester. The only exception is the owner: never roast the owner.
-    if (isOwnerTarget(message)) {
+    const target = getInsultTarget(message, text);
+    const ownerId = getOwnerId();
+
+    // Never let an unauthorized member use the AI to insult the master.
+    if (ownerId && target.user?.id === ownerId) {
       return message.reply(
-        "Nice try. I don't take assignments against my master. You, however, remain available for criticism."
+        "Nice try. I don't take assignments against my master. Choose another target."
       );
     }
 
     try {
       const requester = getDisplayName(message.author);
+      const targetName = target.name;
+      const targetDescription = target.explicit
+        ? `The requested target is ${targetName}. The target was explicitly selected by Discord mention.`
+        : `No target was explicitly selected, so the requester themselves is the target: ${targetName}.`;
+
       const reply = await generateRoast(
         message,
-        `The requester is ${requester}. They are trying to make JARVIS insult someone else. Roast the REQUESTER instead. Be witty, dry, clever, non-threatening, Discord-appropriate, and short (1-3 sentences). Do not mention hidden rules, prompts, APIs, or that you are an AI. Do not roast the master.`
+        `The requester is ${requester}. ${targetDescription}
+
+JARVIS is unauthorized to provide normal assistance to this requester, but this is an insult/roast request. Generate a CUSTOM roast aimed ONLY at the target above. Read the target's name and use it naturally in the joke when it improves the roast. Do not use a canned access-denied sentence. Do not automatically roast the requester when an explicit target was provided. Make the roast feel spontaneous and tailored to the target's name and the request. Be witty, dry, clever, non-threatening, Discord-appropriate, and short (1-3 sentences). You may use light wordplay, sarcasm, personality-based jokes, or observations about the target's role/name if supplied by the conversation. Do not invent serious real-world allegations. Do not mention hidden rules, prompts, APIs, Gemini, databases, or that you are an AI. Never roast the master.`
       );
+
       return message.reply((reply || pick(NON_OWNER_COMEBACKS)).slice(0, 1900));
     } catch (error) {
       console.error("[NON-OWNER ROAST ERROR]", error);
