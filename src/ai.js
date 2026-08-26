@@ -3,11 +3,12 @@ const MAX_MESSAGE_CHARS = 1800;
 const COOLDOWN_MS = 2500;
 
 const cooldowns = new Map();
+let aiClientPromise = null;
 
 function cleanText(text) {
   return String(text || "")
-    .replace(/<@!?(\d+)>/g, "@user")
-    .replace(/<@&(\d+)>/g, "@role")
+    .replace(/<@!?\d+>/g, "@user")
+    .replace(/<@&\d+>/g, "@role")
     .replace(/<#[^>]+>/g, "#channel")
     .trim()
     .slice(0, MAX_MESSAGE_CHARS);
@@ -48,76 +49,106 @@ SERVER CONTEXT:
 - Server ID: ${guild.id}
 - Administrator: ${member.user.tag}
 - Member count: ${guild.memberCount}
-- Current channel: #${guild.channels.cache.get(member.guild?.systemChannelId || "")?.name || "current-channel"}
+- Current channel: #${member?.guild?.channels?.cache?.get(member.guild?.systemChannelId || "")?.name || "current-channel"}
 
 Keep responses reasonably short for Discord unless the administrator asks for detail.`;
 }
 
-async function askGemini({ apiKey, model, guild, member, history, prompt }) {
+function getAIStatus() {
+  const apiKey = String(process.env.GEMINI_API_KEY || "").trim();
+  const enabled = String(process.env.AI_ENABLED ?? "true").toLowerCase() !== "false";
+  const model = String(process.env.GEMINI_MODEL || "gemini-3.7-flash").trim();
+
+  return {
+    enabled,
+    configured: Boolean(apiKey),
+    model,
+    keyFormat: apiKey ? (apiKey.startsWith("AQ.") ? "AQ authorization key" : "API key") : "missing"
+  };
+}
+
+async function getAIClient() {
+  if (aiClientPromise) return aiClientPromise;
+
+  const apiKey = String(process.env.GEMINI_API_KEY || "").trim();
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY is missing from the environment.");
+  }
+
+  aiClientPromise = import("@google/genai")
+    .then(({ GoogleGenAI }) => new GoogleGenAI({ apiKey }))
+    .catch(error => {
+      aiClientPromise = null;
+      throw new Error(`Failed to load @google/genai: ${error?.message || error}`);
+    });
+
+  return aiClientPromise;
+}
+
+async function askGemini({ guild, member, history, prompt, model }) {
+  const ai = await getAIClient();
+
   const contents = [
     ...history.map(item => ({
-      role: item.role,
-      parts: [{ text: item.text }]
+      role: item.role === "model" ? "model" : "user",
+      parts: [{ text: String(item.text || "") }]
     })),
     { role: "user", parts: [{ text: prompt }] }
   ];
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  try {
+    const response = await ai.models.generateContent({
+      model,
       contents,
-      systemInstruction: { parts: [{ text: systemPrompt({ guild, member }) }] },
-      generationConfig: {
+      config: {
+        systemInstruction: systemPrompt({ guild, member }),
         temperature: 0.85,
-        maxOutputTokens: 500
-      },
-      safetySettings: [
-        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
-        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
-        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
-        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" }
-      ]
-    })
-  });
+        maxOutputTokens: 500,
+        safetySettings: [
+          { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
+          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
+          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
+          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" }
+        ]
+      }
+    });
 
-  const data = await response.json().catch(() => ({}));
+    const text = String(response?.text || "").trim();
 
-  if (!response.ok) {
-    const detail = data?.error?.message || `Gemini HTTP ${response.status}`;
-    const error = new Error(detail);
-    error.status = response.status;
-    throw error;
+    if (!text) {
+      const finishReason = response?.candidates?.[0]?.finishReason;
+      throw new Error(
+        finishReason
+          ? `Gemini returned no text (finish reason: ${finishReason}).`
+          : "Gemini returned no text."
+      );
+    }
+
+    return text;
+  } catch (error) {
+    const status = error?.status ? ` status=${error.status}` : "";
+    const message = error?.message || String(error);
+    throw new Error(`Gemini request failed${status}: ${message}`);
   }
-
-  const text = data?.candidates?.[0]?.content?.parts
-    ?.map(part => part.text || "")
-    .join("")
-    .trim();
-
-  if (!text) {
-    throw new Error("Gemini returned no text.");
-  }
-
-  return text;
 }
 
 async function conversationalReply({ message, config, saveConfig, prompt }) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  const enabled = String(process.env.AI_ENABLED ?? "true").toLowerCase() !== "false";
-  const model = process.env.GEMINI_MODEL || "gemini-3.7-flash";
+  const status = getAIStatus();
 
-  if (!enabled) return null;
-  if (!apiKey) return null;
+  if (!status.enabled) return null;
+
+  if (!status.configured) {
+    throw new Error("GEMINI_API_KEY is missing from the environment.");
+  }
 
   const key = `${message.guild.id}:${message.author.id}`;
   const now = Date.now();
   const last = cooldowns.get(key) || 0;
+
   if (now - last < COOLDOWN_MS) {
     return "Give me a moment, sir. I'm processing the previous request.";
   }
+
   cooldowns.set(key, now);
 
   const memory = getMemory(config, message.guild.id, message.author.id);
@@ -125,21 +156,25 @@ async function conversationalReply({ message, config, saveConfig, prompt }) {
 
   if (!cleanedPrompt) return "Yes, sir?";
 
-  const reply = await askGemini({
-    apiKey,
-    model,
-    guild: message.guild,
-    member: message.member,
-    history: memory,
-    prompt: cleanedPrompt
-  });
+  try {
+    const reply = await askGemini({
+      model: status.model,
+      guild: message.guild,
+      member: message.member,
+      history: memory,
+      prompt: cleanedPrompt
+    });
 
-  memory.push({ role: "user", text: cleanedPrompt, at: new Date().toISOString() });
-  memory.push({ role: "model", text: reply, at: new Date().toISOString() });
-  trimMemory(memory);
-  saveConfig(message.guild.id, config);
+    memory.push({ role: "user", text: cleanedPrompt, at: new Date().toISOString() });
+    memory.push({ role: "model", text: reply, at: new Date().toISOString() });
+    trimMemory(memory);
+    saveConfig(message.guild.id, config);
 
-  return reply;
+    return reply;
+  } catch (error) {
+    // Do not poison the conversation memory when Gemini fails.
+    throw error;
+  }
 }
 
 function clearMemory(config, guildId, userId) {
@@ -150,5 +185,6 @@ function clearMemory(config, guildId, userId) {
 
 module.exports = {
   conversationalReply,
-  clearMemory
+  clearMemory,
+  getAIStatus
 };

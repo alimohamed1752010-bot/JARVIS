@@ -32,7 +32,17 @@ client.commands = new Collection();
 
 const afkStore = new Map();
 const reminders = new Map();
-const { conversationalReply, clearMemory } = require("./ai");
+const { conversationalReply, clearMemory, getAIStatus } = require("./ai");
+
+// ============================================================
+// AI DIAGNOSTICS
+// ============================================================
+
+const aiStatus = getAIStatus();
+console.log(
+  `[AI CONFIG] enabled=${aiStatus.enabled} configured=${aiStatus.configured} model=${aiStatus.model} key=${aiStatus.keyFormat}`
+);
+
 
 // ============================================================
 // TOKEN
