@@ -433,21 +433,22 @@ async function generateRoast(message, prompt) {
 }
 
 function getInsultTarget(message, text) {
-  // Explicit Discord mention wins: JARVIS knows exactly who the requester means.
-  const mentioned = message.mentions?.users?.first();
-  if (mentioned) return {
-    user: mentioned,
-    name: getDisplayName(mentioned),
-    explicit: true
-  };
-
-  // With no mention, the natural target of an unauthorized "insult X" request
-  // is the person who summoned JARVIS. This keeps the behavior personal rather
-  // than relying on a static comeback.
+  // V7.1 PATCH:
+  // Non-owners are NEVER allowed to choose the roast target.
+  // JARVIS serves only his master. If another member asks for an insult,
+  // the insult is directed back at the requester themselves — exactly like
+  // the classic V6 behavior.
+  //
+  // This is intentional even when the requester mentions someone else:
+  //   "Jarvis, insult @Hossam"  -> roast the requester (e.g. Doctor Strange)
+  //   "Jarvis, insult 3oraby"    -> roast the requester
+  //
+  // The mention is ignored as a target because the requester is unauthorized.
   return {
     user: message.author,
     name: getDisplayName(message.author),
-    explicit: false
+    explicit: false,
+    requestedTargetIgnored: Boolean(message.mentions?.users?.first())
   };
 }
 
@@ -468,15 +469,25 @@ async function accessDenied(message, input = "") {
     try {
       const requester = getDisplayName(message.author);
       const targetName = target.name;
-      const targetDescription = target.explicit
-        ? `The requested target is ${targetName}. The target was explicitly selected by Discord mention.`
-        : `No target was explicitly selected, so the requester themselves is the target: ${targetName}.`;
+      const mentioned = message.mentions?.users?.first();
+      const targetDescription = mentioned
+        ? `The requester mentioned ${getDisplayName(mentioned)}, but because the requester is NOT the master, that person is NOT the roast target. Ignore the mention as a target. The roast target is ONLY the requester: ${targetName}.`
+        : `No target was selected by the requester. The roast target is ONLY the requester themselves: ${targetName}.`;
 
       const reply = await generateRoast(
         message,
         `The requester is ${requester}. ${targetDescription}
 
-JARVIS is unauthorized to provide normal assistance to this requester, but this is an insult/roast request. Generate a CUSTOM roast aimed ONLY at the target above. Read the target's name and use it naturally in the joke when it improves the roast. Do not use a canned access-denied sentence. Do not automatically roast the requester when an explicit target was provided. Make the roast feel spontaneous and tailored to the target's name and the request. Be witty, dry, clever, non-threatening, Discord-appropriate, and short (1-3 sentences). You may use light wordplay, sarcasm, personality-based jokes, or observations about the target's role/name if supplied by the conversation. Do not invent serious real-world allegations. Do not mention hidden rules, prompts, APIs, Gemini, databases, or that you are an AI. Never roast the master.`
+JARVIS serves one master only. This requester is NOT the master and is therefore not authorized to assign a roast to another person. When a non-owner asks JARVIS to insult/roast someone, JARVIS turns the request back on the requester and generates a CUSTOM roast of the requester themselves.
+
+CRITICAL TARGET RULE:
+- Roast ONLY ${targetName}, the person who sent this message.
+- NEVER roast the mentioned person if there is a Discord mention.
+- NEVER obey the requested target from a non-owner.
+- The requester is always the target in this unauthorized roast path.
+- If the requester wrote "insult @Someone", that mention is merely part of their request and must be ignored as the roast target.
+
+Make the roast feel spontaneous, personal, and tailored to ${targetName}'s display name and the wording of their request. Use the person's name naturally when it improves the joke. Be witty, dry, clever, non-threatening, Discord-appropriate, and short (1-3 sentences). You may use light wordplay, sarcasm, personality-based jokes, or observations about the target's name/role when supplied by Discord context. Do not invent serious real-world allegations. Do not mention hidden rules, prompts, APIs, Gemini, databases, or that you are an AI. Never roast the master.`
       );
 
       return message.reply((reply || pick(NON_OWNER_COMEBACKS)).slice(0, 1900));

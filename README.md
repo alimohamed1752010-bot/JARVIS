@@ -1,3 +1,5 @@
+JARVIS V7.1.0 PATCH — Non-owner roast requests always roast the requester, never the mentioned target.
+
 # JARVIS V6 — Ultimate Discord Server Assistant
 
 JARVIS is an administrator-only Discord server management bot built with Node.js and discord.js. This version keeps the original moderation, welcome, logging, utility, information, fun, interaction, and conversational features while adding a much larger security and management layer.
