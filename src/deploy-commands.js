@@ -1,9 +1,41 @@
-require('dotenv').config();
-const { REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
-const { commands } = require('./commands/registry');
-require('./commands/load');
-const d=(name,desc)=>new SlashCommandBuilder().setName(name).setDescription(desc).setDefaultMemberPermissions(PermissionFlagsBits.Administrator.toString()).setDMPermission(false);
-const jarvis=d('jarvis','JARVIS server assistant');
-for(const [name,desc] of [['help','Show the JARVIS command database'],['diagnostics','Run a complete health check'],['stats','Show server statistics'],['memory','Manage AI memory'],['personality','Set JARVIS personality'],['lockdown','Lock the server down'],['unlockdown','Lift server lockdown'],['automod','Toggle AutoMod'],['antispam','Toggle anti-spam'],['antilinks','Toggle link filtering'],['antiraid','Toggle anti-raid'],['blockedwords','List blocked words'],['joke','Tell a joke'],['fact','Give a fact'],['quote','Give a quote'],['8ball','Ask the magic 8-ball'],['wyr','Would you rather'],['roast','Roast a member']]) { let s=jarvis.addSubcommand(x=>x.setName(name).setDescription(desc)); if(name==='memory')s.addStringOption(o=>o.setName('action').setDescription('status, on, off, or clear').setRequired(false).addChoices({name:'status',value:'status'},{name:'on',value:'on'},{name:'off',value:'off'},{name:'clear',value:'clear'})).addUserOption(o=>o.setName('user').setDescription('Optional member whose memory should be cleared')); if(name==='personality')s.addStringOption(o=>o.setName('mode').setDescription('Personality mode').setRequired(false).addChoices(...['classic','sarcastic','strict','professional','chaotic'].map(x=>({name:x,value:x})))); if(['automod','antispam','antilinks','antiraid'].includes(name))s.addStringOption(o=>o.setName('action').setDescription('Enable or disable').setRequired(true).addChoices({name:'on',value:'on'},{name:'off',value:'off'})); if(name==='roast')s.addUserOption(o=>o.setName('user').setDescription('The person to roast').setRequired(true)); }
-const rest=new REST({version:'10'}).setToken(process.env.DISCORD_TOKEN);
-(async()=>{try{if(!process.env.CLIENT_ID)throw new Error('CLIENT_ID is missing.');const body=[jarvis.toJSON()];const route=process.env.GUILD_ID?Routes.applicationGuildCommands(process.env.CLIENT_ID,process.env.GUILD_ID):Routes.applicationCommands(process.env.CLIENT_ID);await rest.put(route,{body});console.log(process.env.GUILD_ID?'JARVIS slash commands registered to test guild.':'JARVIS global slash commands registered.');}catch(e){console.error('[DEPLOY ERROR]',e);process.exitCode=1;}})();
+require("dotenv").config();
+const { REST, Routes } = require("discord.js");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const commands = [];
+const { PermissionFlagsBits } = require("discord.js");
+const commandsPath = path.join(__dirname, "commands");
+
+for (const file of fs.readdirSync(commandsPath).filter(f => f.endsWith(".js"))) {
+  const command = require(path.join(commandsPath, file));
+  const json = command.data.toJSON();
+  // JARVIS is intentionally administrator-only. This complements the runtime check.
+  json.default_member_permissions = PermissionFlagsBits.Administrator.toString();
+  json.dm_permission = false;
+  commands.push(json);
+}
+
+const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
+
+(async () => {
+  try {
+    console.log(`Registering ${commands.length} commands...`);
+
+    if (process.env.GUILD_ID) {
+      await rest.put(
+        Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
+        { body: commands }
+      );
+      console.log("Guild commands registered.");
+    } else {
+      await rest.put(
+        Routes.applicationCommands(process.env.CLIENT_ID),
+        { body: commands }
+      );
+      console.log("Global commands registered.");
+    }
+  } catch (error) {
+    console.error(error);
+  }
+})();
