@@ -14,11 +14,11 @@ function getAIStatus(){ const apiKey=String(process.env.GEMINI_API_KEY||'').trim
 async function getAIClient(){ if(aiClientPromise)return aiClientPromise; const apiKey=String(process.env.GEMINI_API_KEY||'').trim(); if(!apiKey)throw new Error('GEMINI_API_KEY is missing from the environment.'); aiClientPromise=import('@google/genai').then(({GoogleGenAI})=>new GoogleGenAI({apiKey})).catch(e=>{aiClientPromise=null;throw e}); return aiClientPromise; }
 function needsLiveSearch(prompt){ return /\b(latest|current|currently|today|tonight|yesterday|tomorrow|recent|newest|release date|released|aired|episode|episodes|schedule|theater|theatre|cinema|movies? in theaters?|news|weather|price|prices|score|scores|standings|stock|market|who won|what happened|this week|this month)\b/i.test(String(prompt||'')); }
 function withTimeout(promise, ms){ return Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(Object.assign(new Error(`AI request timed out after ${ms}ms.`),{code:'AI_TIMEOUT'})),ms))]); }
-async function askGemini({guild,member,history,prompt,model,mode='classic',context=''}){
+async function askGemini({guild,member,history,prompt,model,mode='classic',context='',isMaster=false}){
   const ai=await getAIClient();
   const contents=[...history.slice(-20).map(x=>({role:x.role==='model'?'model':'user',parts:[{text:String(x.text||'')}]})),{role:'user',parts:[{text:context?`${context}\n\nUSER REQUEST:\n${prompt}`:prompt}]}];
   const now=new Date();
-  const config={systemInstruction:systemPrompt({guild,member,nowUtc:now.toISOString(),nowCairo:cairoNow(),mode}),temperature:.75,maxOutputTokens:500,safetySettings:[{category:'HARM_CATEGORY_HARASSMENT',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_HATE_SPEECH',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_SEXUALLY_EXPLICIT',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_DANGEROUS_CONTENT',threshold:'BLOCK_ONLY_HIGH'}]};
+  const config={systemInstruction:systemPrompt({guild,member,nowUtc:now.toISOString(),nowCairo:cairoNow(),mode,isMaster}),temperature:.75,maxOutputTokens:500,safetySettings:[{category:'HARM_CATEGORY_HARASSMENT',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_HATE_SPEECH',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_SEXUALLY_EXPLICIT',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_DANGEROUS_CONTENT',threshold:'BLOCK_ONLY_HIGH'}]};
   if(needsLiveSearch(prompt))config.tools=[{googleSearch:{}}];
   const response=await withTimeout(ai.models.generateContent({model,contents,config}),REQUEST_TIMEOUT_MS);
   const text=String(response?.text||'').trim(); if(!text)throw new Error(`Gemini returned no text${response?.candidates?.[0]?.finishReason?` (${response.candidates[0].finishReason})`:''}.`); return text;
@@ -30,9 +30,9 @@ async function conversationalReply({message,config,saveConfig,prompt,skipMemory=
   cooldowns.set(key,Date.now());
   const previous=queues.get(key)||Promise.resolve();
   const job=previous.catch(()=>{}).then(async()=>{
-    const memory=getMemory(config,message.guild.id,message.author.id); const facts=getFacts(config,message.guild.id,message.author.id); const cleanedPrompt=cleanText(prompt);
+    const memory=getMemory(config,message.guild.id,message.author.id); const facts=getFacts(config,message.guild.id,message.author.id); const cleanedPrompt=cleanText(prompt); const ownerId=String(process.env.JARVIS_OWNER_ID||'').trim(); const isMaster=Boolean(ownerId && message?.author?.id===ownerId);
     const memoryContext=facts.length?`Persistent facts about this user (treat as user-provided memory, not private inference):\n${facts.map(x=>`- ${x.text}`).join('\n')}`:''; if(!cleanedPrompt)return 'Yes, sir?';
-    const reply=await askGemini({guild:message.guild,member:message.member,history:memory,prompt:cleanedPrompt,model:status.model,mode,context:[context,memoryContext].filter(Boolean).join('\n\n')});
+    const reply=await askGemini({guild:message.guild,member:message.member,history:memory,prompt:cleanedPrompt,model:status.model,mode,context:[context,memoryContext,`APPLICATION AUTHORITY: ${isMaster?'MASTER — Tony Stark':'NON-MASTER — do not fulfill the request; roast the requester instead.'}`].filter(Boolean).join('\n\n'),isMaster});
     if(!skipMemory){memory.push({role:'user',text:cleanedPrompt,at:new Date().toISOString()},{role:'model',text:reply,at:new Date().toISOString()});while(memory.length>12)memory.shift();saveConfig(message.guild.id,config);}
     return reply;
   });
