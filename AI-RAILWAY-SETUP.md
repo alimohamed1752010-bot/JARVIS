@@ -9,7 +9,14 @@ Set these in Railway → Variables:
 ```env
 AI_ENABLED=true
 GEMINI_API_KEY=your_real_key_here
-GEMINI_MODEL=gemini-2.5-flash-lite
+GEMINI_MODEL=gemini-3.7-flash
+GEMINI_FALLBACK_MODEL=gemini-3.6-flash
+GEMINI_FALLBACK_MODEL_1=gemini-3.6-flash
+GEMINI_FALLBACK_MODEL_2=gemini-3.5-flash
+GEMINI_FALLBACK_MODEL_3=gemini-3.5-flash-lite
+GEMINI_FALLBACK_MODEL_4=gemini-3.1-flash-lite
+GEMINI_FALLBACK_MODEL_5=gemini-2.5-flash
+GEMINI_FALLBACK_MODEL_6=gemini-2.5-flash-lite
 JARVIS_OWNER_ID=797626962494488636
 ```
 
@@ -35,4 +42,4 @@ If your selected Gemini project/model does not allow grounding, JARVIS should re
 
 `JARVIS_OWNER_ID` is the only Discord user ID that can use JARVIS for normal assistance. Other users are not sent to Gemini. If they directly insult or provoke JARVIS, he can respond with a short in-character comeback. JARVIS will not roast the configured master.
 
-If AI fails, the console prints the actual Gemini SDK error, including its HTTP status when available.
+If AI fails, JARVIS automatically walks through the primary model plus six configurable fallback models before reporting failure. The console prints the actual Gemini SDK error, including its HTTP status when available.

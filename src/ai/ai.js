@@ -48,7 +48,19 @@ async function generate({guild,member,history,prompt,model,mode='classic',contex
 
 async function generateWithFallback(args){
   const status=getAIStatus();
-  const candidates=[status.model,status.fallbackModel,'gemini-2.5-flash-lite','gemini-2.5-flash','gemini-flash-lite-latest','gemini-flash-latest']
+  // Primary model + SIX independent fallbacks.
+  // Each fallback can be configured in Railway with GEMINI_FALLBACK_MODEL_1..6.
+  // The defaults are current text-capable Gemini models and are deduplicated.
+  const configuredFallbacks=[1,2,3,4,5,6].map(i=>process.env[`GEMINI_FALLBACK_MODEL_${i}`]);
+  const defaultFallbacks=[
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-lite'
+  ];
+  const candidates=[status.model,status.fallbackModel,...configuredFallbacks,...defaultFallbacks]
     .map(x=>String(x||'').trim()).filter(Boolean)
     .filter((x,i,a)=>a.indexOf(x)===i);
   let lastError=null;

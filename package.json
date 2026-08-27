@@ -1,7 +1,7 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "8.0.8",
-  "description": "JARVIS V8.0.8 Ultimate AI Discord assistant with resilient non-master roast mode and current Gemini model fallbacks.",
+  "version": "8.0.9",
+  "description": "JARVIS V8.0.9 Ultimate AI Discord assistant with resilient non-master roast mode and six configurable Gemini fallback models.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
