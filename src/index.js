@@ -800,26 +800,31 @@ async function executeModerationAction(message, action, member, reason, duration
         return { ok:false, text:`**${member.user.tag}** is not currently in a voice channel, so I cannot move them, sir.` };
       }
 
-      const parts = naturalVoiceMoveParts(message.content.replace(/^jarvis\s+/i, '').trim());
-      const destinationQuery = parts?.destination;
-      if (!destinationQuery) {
+      // A clarification reply already carries the selected Discord channel ID.
+      // Do NOT parse message.content in that case: the reply can be just "1",
+      // "gen 1", or "General 1", none of which contains a "to DEST" clause.
+      const rawDestination = options.destinationOverride ||
+        naturalVoiceMoveParts(message.content.replace(/^jarvis\s+/i, '').trim())?.destination;
+      if (!rawDestination) {
         return { ok:false, text:'Which voice channel should I move them to, sir?' };
       }
 
       const voiceChannels = message.guild.channels.cache.filter(c =>
         c.isVoiceBased() && [ChannelType.GuildVoice, ChannelType.GuildStageVoice].includes(c.type)
       );
-      const rawDestination = options.destinationOverride || destinationQuery;
       const cleanDestination = normalizeVoiceChannelQuery(rawDestination);
+      const comparableDestination = comparableVoiceChannelName(cleanDestination);
 
       const mentionedChannel = String(rawDestination).match(/^<#(\d+)>$/)?.[1];
       let matches = mentionedChannel
         ? voiceChannels.filter(c => c.id === mentionedChannel)
-        : voiceChannels.filter(c => c.name.toLowerCase() === cleanDestination.toLowerCase());
+        // IMPORTANT: exact normalized name wins.
+        // "General 1" must not also match "Secret General 1".
+        : voiceChannels.filter(c => comparableVoiceChannelName(c.name) === comparableDestination);
 
       if (!matches.size) {
         matches = voiceChannels.filter(c =>
-          c.name.toLowerCase().includes(cleanDestination.toLowerCase())
+          comparableVoiceChannelName(c.name).includes(comparableDestination)
         );
       }
 

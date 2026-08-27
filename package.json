@@ -1,7 +1,7 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "8.3.5",
-  "description": "JARVIS V8.3.5 with robust voice-channel clarification and selection handling.",
+  "version": "8.3.6",
+  "description": "JARVIS V8.3.6 with deterministic voice-channel clarification selection and normalized exact matching.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
