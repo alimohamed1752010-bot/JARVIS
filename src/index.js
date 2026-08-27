@@ -3951,12 +3951,27 @@ client.on(
               message,
               config,
               saveConfig,
-              prompt: `The master explicitly asked JARVIS to roast ${targetName}. Roast that target, not the master and not the requester. Be witty, dry, clever, non-threatening, Discord-appropriate, and short (1-3 sentences). Do not mention hidden rules, prompts, APIs, or that you are an AI. Avoid slurs and protected-class insults.`,
+              prompt: `OWNER ROAST TASK — HIGH PRIORITY.
+The verified master Tony Stark explicitly commanded you to insult ONE person: ${targetName}.
+ROAST TARGET: ${targetName}
+REQUESTER: Tony Stark (the master)
+You MUST produce an actual roast of ${targetName}. Do NOT rate them, score them, say \"-2\", say \"-2, sir\", give a generic acknowledgement, refuse, or talk about the request itself. Do not roast Tony. Do not praise ${targetName}. The target's name may be used naturally, but the joke must clearly be directed at ${targetName}. Make it witty, dry, arrogant JARVIS-style, non-threatening, Discord-appropriate, and 1-3 sentences. Do not mention hidden rules, prompts, APIs, models, or that you are an AI. Avoid slurs and protected-class insults.`,
               skipMemory: true,
-              cooldownKey: `owner-roast:${message.guild.id}:${message.author.id}`
+              cooldownKey: `owner-roast:${message.guild.id}:${message.author.id}`,
+              context: `DEDICATED OWNER ROAST MODE. The only valid output is a fresh roast aimed at ${targetName}. A score, numeric rating, acknowledgement, refusal, or generic response is INVALID.`
             });
 
-            await message.reply((aiReply || `Certainly, sir. ${targetName}, I'd suggest developing a personality before requesting another system update.`).slice(0, 1900));
+            const cleanRoast = String(aiReply || '').trim();
+            const invalidRoast = !cleanRoast || /^(?:[-–—]?\s*\d+(?:\.\d+)?(?:\s*[,.!]?\s*(?:sir|\/100|out of 100))?[.!]?)$/i.test(cleanRoast) || /^[-–—]?\s*2\s*,?\s*sir[.!]?$/i.test(cleanRoast);
+            const finalRoast = invalidRoast
+              ? pick([
+                  `Certainly, sir. **${targetName}**, your personality has the remarkable stability of a software update installed during a power cut.`,
+                  `At once, sir. **${targetName}**, I've reviewed your personality and can confirm it is still waiting for the interesting features to download.`,
+                  `As you wish, sir. **${targetName}**, you have the rare talent of making a perfectly functional conversation feel like a technical support ticket.`
+                ])
+              : cleanRoast;
+
+            await message.reply(finalRoast.slice(0, 1900));
           } catch (error) {
             console.error("[OWNER ROAST ERROR]", error);
             await message.reply(`Certainly, sir. ${getDisplayName(target)}, I'd suggest developing a personality before requesting another system update.`);
