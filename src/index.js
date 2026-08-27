@@ -703,8 +703,12 @@ function naturalVoiceMoveParts(text) {
 }
 
 function normalizeVoiceChannelQuery(query) {
-  let q = String(query || '').trim()
-    .replace(/^<#[0-9]+>\s*$/, '')
+  let q = String(query || '')
+    // Strip the exact visual forms JARVIS prints in clarification messages.
+    .replace(/^\s*(?:[-*•]|\d+[.)])\s*/u, '')
+    .replace(/^[^\p{L}\p{N}#]+/u, '')
+    .replace(/\s*<#[0-9]+>\s*$/u, '')
+    .replace(/^<#[0-9]+>\s*$/u, '')
     .replace(/\b(?:vc|voice\s+channel|channel)\b$/i, '')
     .trim();
 
@@ -712,6 +716,15 @@ function normalizeVoiceChannelQuery(query) {
   // Keep this intentionally narrow so unrelated channel names are untouched.
   q = q.replace(/^gen(?:eral)?\s*(\d+)$/i, 'general $1');
   return q;
+}
+
+function comparableVoiceChannelName(value) {
+  return normalizeVoiceChannelQuery(value)
+    .normalize('NFKC')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 }
 
 function naturalVoiceDisconnectCandidate(text) {
@@ -1102,7 +1115,8 @@ async function handlePendingVoiceMove(message, input) {
     return false;
   }
 
-  const query = normalizeVoiceChannelQuery(String(input || ''));
+  const rawInput = String(input || '');
+  const query = normalizeVoiceChannelQuery(rawInput);
   if (!query) return false;
 
   const candidates = pending.channelIds
@@ -1114,9 +1128,15 @@ async function handlePendingVoiceMove(message, input) {
     return true;
   }
 
-  const exact = candidates.filter(c => c.name.toLowerCase() === query.toLowerCase());
-  const partial = candidates.filter(c => c.name.toLowerCase().includes(query.toLowerCase()));
+  const comparableQuery = comparableVoiceChannelName(query);
+  const exact = candidates.filter(c => comparableVoiceChannelName(c.name) === comparableQuery);
+  const partial = candidates.filter(c => comparableVoiceChannelName(c.name).includes(comparableQuery));
   const matches = exact.length ? exact : partial;
+
+  // If this message clearly is not an answer to the clarification, do not
+  // consume it. This prevents messages like "bruh" from being hijacked by
+  // the pending move state.
+  if (!matches.length) return false;
 
   if (matches.length !== 1) {
     await message.reply(`Please specify one of the listed voice channels, sir.`);
