@@ -13,7 +13,7 @@ test('V10 voice is text-to-TTS only and contains no active STT receiver', () => 
 
 test('V10 package removes receive-only voice dependencies', () => {
   const pkg = require('../package.json');
-  assert.equal(pkg.version, '11.0.0');
+  assert.equal(pkg.version, '10.0.0');
   assert.equal(pkg.dependencies['prism-media'], undefined);
   assert.equal(pkg.dependencies['opusscript'], undefined);
 });
