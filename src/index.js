@@ -730,21 +730,93 @@ async function liveDiscordContext(message, input) {
   return null;
 }
 
+async function executeModerationAction(message, action, member, reason, durationMs = 10 * 60 * 1000) {
+  const me = message.guild.members.me;
+  if (!member || !me) return { ok:false, text:'I could not resolve the member or my own server member, sir.' };
+  if (member.id === ownerId()) return { ok:false, text:'Absolutely not. I do not take disciplinary action against my master.' };
+  if (member.id === message.guild.ownerId && member.id !== message.author.id) return { ok:false, text:'I cannot moderate the server owner. Discord hierarchy will not permit it.' };
+  if (member.id === me.id) return { ok:false, text:'I shall decline to moderate myself, sir.' };
+  const canAct = action === 'ban' ? member.bannable : action === 'kick' ? member.kickable : action === 'timeout' ? member.moderatable : true;
+  if (!canAct) return { ok:false, text:'I cannot safely perform that action because of Discord role hierarchy or missing permissions.' };
+  try {
+    let label = action.toUpperCase();
+    if (action === 'ban') await member.ban({ reason: `JARVIS: ${reason || 'Owner-directed moderation'}` });
+    else if (action === 'kick') await member.kick(`JARVIS: ${reason || 'Owner-directed moderation'}`);
+    else if (action === 'timeout') {
+      const safeDuration = Math.min(Math.max(Number(durationMs) || 10 * 60 * 1000, 1000), 28 * 24 * 60 * 60 * 1000);
+      await member.timeout(safeDuration, `JARVIS: ${reason || 'Owner-directed moderation'}`);
+      label = `${Math.round(safeDuration / 60000)} MINUTE TIMEOUT`;
+    } else addWarning(message.guild.id, member.id, reason || 'Owner-directed moderation', message.author.tag);
+    const c = addCase(message.guild.id, { action: action.toUpperCase(), userId: member.id, moderatorId: message.author.id, reason: reason || 'Owner-directed moderation', evidence: { channelId: message.channel.id, messageId: message.id, source: 'natural-language-owner-command' } });
+    await logEvent(message.guild, `🛡️ JARVIS executed **${label}** on **${member.user.tag}** — Case #${c.id}`);
+    return { ok:true, text:`Done, sir. I handled **${member.user.tag}** with a **${label.toLowerCase()}**. Case #${c.id}.` };
+  } catch (error) {
+    console.error('[JARVIS NATURAL MODERATION ERROR]', error);
+    return { ok:false, text:`I understood the instruction, sir, but Discord rejected the action: ${String(error?.message || error).slice(0, 280)}` };
+  }
+}
+
+async function understandOwnerModeration(message, text) {
+  const lower = String(text || '').toLowerCase();
+  let target = memberFromMention(message);
+  let action = dangerousActionFromText(text);
+  let durationMs = 10 * 60 * 1000;
+
+  // Natural-language member resolution. Mentions are preferred; otherwise search
+  // the member name immediately before a situation phrase such as "is spamming".
+  if (!target) {
+    const candidates = [
+      text.match(/(?:handle|deal with|take care of|do something about)\s+(.+?)(?:\s+(?:is|has been|keeps|was)\s+|$)/i)?.[1],
+      text.match(/^(.+?)\s+(?:is|has been|keeps|kept|was)\s+(?:spamming|flooding|spam|annoying|harassing|advertising|scamming|trolling)\b/i)?.[1],
+      text.match(/^(?:hey\s+)?(.+?)\s+(?:is|has been|keeps)\s+/i)?.[1]
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+      target = await discordTools.getMember(message.guild, String(candidate).trim().replace(/[,.!?]+$/, ''));
+      if (target) break;
+    }
+  }
+  if (!target) return false;
+
+  // Explicit actions always win. Otherwise infer a conservative action from the
+  // reported behavior; "handle" never silently escalates to kick/ban.
+  if (!action) {
+    if (/\b(spam|spamming|flood|flooding|advertis|raid|message\s+spam)\b/i.test(lower)) action = 'timeout';
+    else if (/\b(harass|harassing|harassment|threaten|threatening)\b/i.test(lower)) action = 'timeout';
+    else if (/\b(scam|scamming|phish|phishing)\b/i.test(lower)) action = 'timeout';
+    else if (/\b(warn|warning)\b/i.test(lower)) action = 'warn';
+  }
+  if (!action) return false;
+
+  const dm = text.match(/\b(\d+)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\b/i);
+  if (dm) {
+    const n = Number(dm[1]); const unit = dm[2].toLowerCase();
+    const mult = /^s/.test(unit) ? 1000 : /^m/.test(unit) ? 60000 : /^h/.test(unit) ? 3600000 : 86400000;
+    durationMs = n * mult;
+  }
+  const reasonMatch = text.match(/\b(?:because|reason|for)\b[: ]+(.+)$/i);
+  const reason = reasonMatch?.[1]?.trim() ||
+    (/\bspam|spamming|flooding\b/i.test(lower) ? 'Spam/flooding reported by the master.' :
+     /\bharass|harassing|harassment\b/i.test(lower) ? 'Harassment reported by the master.' :
+     /\bscam|scamming|phish|phishing\b/i.test(lower) ? 'Suspicious/scam activity reported by the master.' :
+     'Owner-directed moderation.');
+
+  const result = await executeModerationAction(message, action, target, reason, durationMs);
+  await message.reply(result.text);
+  return true;
+}
+
 async function handleOwnerToolRequest(message, input) {
   const text = String(input || '').trim();
   const math=calculateSimpleMath(text); if(math!==null){ await message.reply(`**${math}, sir.**`); return true; }
   if (looksLikeClockQuestion(text)) { await message.reply(localDateTimeReply()); return true; }
   const live=await liveDiscordContext(message,text); if(live){ await message.reply(live.slice(0,1900)); return true; }
+  if (await understandOwnerModeration(message, text)) return true;
 
   const action = dangerousActionFromText(text);
   const target = memberFromMention(message);
   if (action && target) {
     const reasonMatch = text.match(/\b(?:because|reason)\b[: ]+(.+)$/i);
     return confirmModerationAction(message, action, target, reasonMatch?.[1] || text.replace(/<@!?\d+>/g, '').replace(/\b(ban|kick|timeout|time out|mute|warn|warning)\b/i, '').trim()) || true;
-  }
-  if (/\bhandle\b|\bdeal with\b/i.test(text) && target) {
-    if (/\bspam|spamming|flooding\b/i.test(text)) return confirmModerationAction(message, 'timeout', target, 'Spam detected by the master.') || true;
-    await message.reply(`I can handle **${target.user.tag}**, sir. Do you want a warning, timeout, kick, or ban?`); return true;
   }
   return false;
 }
@@ -3962,7 +4034,12 @@ You MUST produce an actual roast of ${targetName}. Do NOT rate them, score them,
             });
 
             const cleanRoast = String(aiReply || '').trim();
-            const invalidRoast = !cleanRoast || /^(?:[-–—]?\s*\d+(?:\.\d+)?(?:\s*[,.!]?\s*(?:sir|\/100|out of 100))?[.!]?)$/i.test(cleanRoast) || /^[-–—]?\s*2\s*,?\s*sir[.!]?$/i.test(cleanRoast);
+            const invalidRoast = !cleanRoast || cleanRoast.length < 12 ||
+              /^(?:[-–—]?\s*\d+(?:\.\d+)?(?:\s*(?:\/100|out of 100))?(?:\s*,?\s*sir)?[.!]?)$/i.test(cleanRoast) ||
+              /(?:^|\b)(?:-?2|-?1|0|10)\s*,?\s*(?:sir|out of 100|\/100)(?:\b|[.!])/i.test(cleanRoast) ||
+              /\b(?:i(?:'|’)d|i would|let me)\s+(?:rate|score)\b/i.test(cleanRoast) ||
+              /\b(?:rating|score)\s*[:=-]?\s*\d+/i.test(cleanRoast) ||
+              /\b(?:certainly|of course|noted|understood),?\s+sir[.!]?$/i.test(cleanRoast);
             const finalRoast = invalidRoast
               ? pick([
                   `Certainly, sir. **${targetName}**, your personality has the remarkable stability of a software update installed during a power cut.`,

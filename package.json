@@ -1,7 +1,7 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "8.2.0",
-  "description": "JARVIS V8.2.0 Ultimate Railway AI Discord assistant with a unified request-aware V7.4-style non-master conversation pipeline plus V8 sessions, tools, analytics, voice, and resilient AI handling.",
+  "version": "8.2.1",
+  "description": "JARVIS V8.2.1 Ultimate Railway AI Discord assistant with a unified request-aware V7.4-style non-master conversation pipeline plus V8 sessions, tools, analytics, voice, and resilient AI handling.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
