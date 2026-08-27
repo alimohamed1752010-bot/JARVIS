@@ -1,8 +1,8 @@
-# JARVIS V8 — Ultimate Railway Build
+# JARVIS V8.1.0 — Ultimate Railway Build
 
-JARVIS V8 is the upgraded continuation of the V7.4 Ultimate Railway bot. It keeps the existing administrator-only Discord management system while adding a real assistant architecture: persistent sessions, memory, fallback AI models, request protection, tools, health diagnostics, usage tracking, and optional voice output.
+JARVIS V8.1.0 is the upgraded continuation of the V7.4 Ultimate Railway bot. It keeps the existing administrator-only Discord management system while adding a real assistant architecture: persistent sessions, memory, fallback AI models, request protection, tools, health diagnostics, usage tracking, and optional voice output.
 
-## V8 additions
+## V8.1.0 additions
 
 - Persistent conversation sessions per server/user.
 - `jarvis newchat` / `jarvis resetchat` to reset a session.
@@ -52,3 +52,8 @@ jarvis voice leave
 ```
 
 The existing V7.4 commands, moderation, AutoMod, Anti-Raid, cases, dashboard, reminders, analytics and security systems remain part of the build.
+
+
+## V8.1.0 hybrid behavior
+
+V8.1.0 deliberately combines V7.4's stronger conversational/roast personality contract with V8's persistent sessions, six-model fallback routing, throttling, diagnostics, tools, dashboard, and optional voice. Authority is always enforced by the application and then reinforced in the AI prompt.
