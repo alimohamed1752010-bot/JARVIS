@@ -50,7 +50,7 @@ const reminders = new Map();
 // This lets a reply like "general 1" complete the move without requiring
 // the user to repeat the entire command.
 const pendingVoiceMoves = new Map();
-const { conversationalReply, clearMemory, getAIStatus, summarizeSession } = require("./ai");
+const { conversationalReply, clearMemory, getAIStatus, summarizeSession, parseVoiceMoveIntent } = require("./ai");
 const { ensureV8, getSession, clearSession, usageSnapshot, healthSnapshot } = require("./v8/core");
 const voice = require("./v8/voice");
 const { addFact, getFacts, clearFacts } = require("./ai/memory");
@@ -806,7 +806,7 @@ async function resolveNaturalMoveTargets(message, rawTarget) {
 
   // Support "me and Steve", "Steve and me", and comma-separated names.
   const pieces = text
-    .replace(/\s+and\s+/gi, ',')
+    .replace(/\s+(?:and|n|&)\s+/gi, ',')
     .split(',')
     .map(x => x.trim())
     .filter(Boolean);
@@ -1066,7 +1066,16 @@ async function understandOwnerModeration(message, text) {
   // Voice moves support one or many targets, including "me", "me and Steve",
   // and "everyone". Resolve the destination once, then execute directly by ID.
   if (action === 'voicemove') {
-    const parts = naturalVoiceMoveParts(text);
+    let parts = naturalVoiceMoveParts(text);
+    // Let the configured AI understand natural language first. The deterministic
+    // parser remains the fallback, so a temporary AI failure never breaks a
+    // moderation command. The AI only extracts intent; Discord IDs and actual
+    // member/channel resolution still happen locally and safely.
+    let aiMove = null;
+    try { aiMove = await parseVoiceMoveIntent({message, prompt:text}); } catch (e) { console.warn('[AI VOICE MOVE PARSER]', e?.message||e); }
+    if (aiMove?.destination) {
+      parts = { target: aiMove.targets.join(', '), destination: aiMove.destination };
+    }
     const targets = target ? [target] : await resolveNaturalMoveTargets(message, parts?.target);
     if (!targets.length) {
       await message.reply('I could not resolve anyone to move, sir.');

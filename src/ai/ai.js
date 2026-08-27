@@ -147,4 +147,28 @@ async function summarizeSession({message,config,saveConfig}){
   return `🧠 **Session summarized.**\n${result.text}`;
 }
 
-module.exports={conversationalReply,clearMemory,summarizeSession,getAIStatus,needsLiveSearch,REQUEST_TIMEOUT_MS};
+async function parseVoiceMoveIntent({message, prompt}) {
+  const status=getAIStatus();
+  if(!status.enabled || !status.configured) return null;
+  const instruction = `You are JARVIS's command parser. Convert the user's voice-channel move request into JSON only. Do not execute anything. Return exactly one JSON object with this shape: {"targets":["..."],"destination":"..."}.
+Rules:
+- targets may contain natural references such as "me", "myself", "Steve", "Maro", or the exact phrase "everyone".
+- Split multiple targets joined by and, &, n, commas, or similar.
+- Preserve names; do not invent usernames.
+- destination is the user's requested voice-channel name, including shorthand like "gen 1" or "sec gen 1".
+- If the request is not clearly a voice-channel move, return {"targets":[],"destination":""}.
+- Never return explanations or markdown.
+USER REQUEST: ${String(prompt||'').slice(0,1200)}`;
+  try {
+    const result=await generateWithFallback({guild:message.guild,member:message.member,history:[],prompt:instruction,mode:'professional',context:'Return strict JSON only. This is parsing, not conversation.',isMaster:true});
+    const raw=String(result.text||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
+    const parsed=JSON.parse(raw);
+    if(!parsed || !Array.isArray(parsed.targets) || typeof parsed.destination!=='string') return null;
+    return {targets:parsed.targets.map(x=>String(x||'').trim()).filter(Boolean).slice(0,20),destination:parsed.destination.trim()};
+  } catch(error) {
+    console.warn('[AI VOICE PARSER] Falling back to deterministic parser:', error?.message||error);
+    return null;
+  }
+}
+
+module.exports={parseVoiceMoveIntent,conversationalReply,clearMemory,summarizeSession,getAIStatus,needsLiveSearch,REQUEST_TIMEOUT_MS};
