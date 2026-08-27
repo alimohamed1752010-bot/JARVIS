@@ -372,10 +372,7 @@ registerCommand("usage", "System", async (message) => {
 registerCommand("health", "System", async (message) => {
   if (!await requireAdmin(message)) return;
   const h=healthSnapshot({client,getAIStatus,guildCount:client.guilds.cache.size}); const v=voice.status();
-  return message.reply(`🩺 **JARVIS V9 HEALTH**\n• Discord: **${h.discord?'ONLINE':'OFFLINE'}**\n• AI: **${h.ai.configured?'CONFIGURED':'NOT CONFIGURED'}**\n• Primary model: **${h.ai.model}**\n• Fallback: **${h.ai.fallback||'same/none'}**\n• Voice: **${v.enabled&&v.available?'READY':v.enabled?'ENABLED / DEPENDENCIES MISSING':'OFF'}**
-• Voice package: **${v.voicePackage||'unknown'}**
-• DAVE: **${v.daveyPackage||'unknown'}**
-• Node: **${v.node||process.versions.node}**\n• Uptime: **${Math.floor(h.uptime)}s**\n• RAM: **${h.memoryMB} MB**`);
+  return message.reply(`🩺 **JARVIS V9 HEALTH**\n• Discord: **${h.discord?'ONLINE':'OFFLINE'}**\n• AI: **${h.ai.configured?'CONFIGURED':'NOT CONFIGURED'}**\n• Primary model: **${h.ai.model}**\n• Fallback: **${h.ai.fallback||'same/none'}**\n• Voice: **${v.enabled&&v.available?'READY':v.enabled?'ENABLED / DEPENDENCIES MISSING':'OFF'}**\n• Uptime: **${Math.floor(h.uptime)}s**\n• RAM: **${h.memoryMB} MB**`);
 }, "Run a JARVIS V9 health check.");
 
 registerCommand("mode", "System", async (message,args) => {
@@ -400,8 +397,8 @@ registerCommand("voice", "System", async (message,args) => {
   const vc = member?.voice?.channel || message.guild.voiceStates.cache.get(message.author.id)?.channel;
   if(sub==='leave'){ const existing=message.guild.__jarvisVoiceConnection; existing?.destroy(); delete message.guild.__jarvisVoiceConnection; return message.reply('🔊 Leaving the voice channel, sir.'); }
   if(!vc) return message.reply('🔊 Join a voice channel first, sir.');
-  if(!voice.status().available) { const v=voice.status(); return message.reply(`🔊 Voice dependencies are incomplete. @discordjs/voice=${v.voicePackage}, @snazzah/davey=${v.daveyPackage}, Node=${v.node}. Redeploy the V9 voice build with a fresh npm install.`); }
-  try { const connection=await voice.join(vc); message.guild.__jarvisVoiceConnection=connection; await voice.speakText(connection,'Voice systems online. I am listening, sir.'); return message.reply(`🔊 Voice systems online in **${vc.name}**, sir.`); } catch(e) { console.error('[VOICE]',e); return message.reply(`❌ Voice startup failed: ${String(e.message||e).slice(0,500)}`); }
+  if(!voice.status().available) return message.reply('🔊 Voice is not installed in this build. Set the V8 voice dependencies and redeploy.');
+  try { const connection=await voice.join(vc,{onTranscript:({userId,text})=>handleVoiceTranscript(message.guild,text,userId)}); message.guild.__jarvisVoiceConnection=connection; await voice.speakText(connection,'Voice systems online. I am listening, sir.'); return message.reply(`🔊 Voice systems online in **${vc.name}**, sir.`); } catch(e) { console.error('[VOICE]',e); return message.reply(`❌ Voice startup failed: ${String(e.message||e).slice(0,500)}`); }
 }, "Join your voice channel and let JARVIS speak.");
 
 registerCommand("briefing", "System", async (message,args) => {
@@ -4443,6 +4440,30 @@ client.on(
 );
 
 // ============================================================
+// VOICE TRANSCRIPT BRIDGE
+// ============================================================
+async function handleVoiceTranscript(guild, text, userId) {
+  const ownerId = getOwnerId();
+  if (userId !== ownerId) return;
+  const channel = guild.channels.cache.find(c => c.isTextBased?.() && c.permissionsFor?.(guild.members.me)?.has(PermissionsBitField.Flags.SendMessages));
+  if (!channel) return;
+  const owner = await guild.members.fetch(ownerId).catch(()=>null);
+  if (!owner) return;
+  const fake = {
+    author: owner.user,
+    member: owner,
+    guild,
+    channel,
+    content: `jarvis ${text}`,
+    mentions: { users: new Map(), roles: new Map() },
+    reply: (...args) => channel.send(...args),
+    delete: async()=>{}
+  };
+  console.log(`[VOICE COMMAND] ${text}`);
+  client.emit(Events.MessageCreate, fake);
+}
+
+// ============================================================
 // MESSAGE SYSTEM
 // ============================================================
 
@@ -4548,6 +4569,21 @@ client.on(
       const nonOwnerInput = rawContent.replace(/\bjarvis\b/ig, "").trim();
       await accessDenied(message, nonOwnerInput);
       return;
+    }
+
+    // If JARVIS is connected to voice, make every reply from this message audible.
+    const activeVoiceConnection = message.guild.__jarvisVoiceConnection;
+    if (activeVoiceConnection) {
+      const originalReply = message.reply.bind(message);
+      message.reply = async (...replyArgs) => {
+        const sent = await originalReply(...replyArgs);
+        try {
+          const payload = replyArgs[0];
+          const text = typeof payload === 'string' ? payload : String(payload?.content || '');
+          if (text.trim()) await voice.speakText(activeVoiceConnection, text.replace(/<[^>]+>/g,'').slice(0,3000));
+        } catch (e) { console.error('[VOICE TTS HOOK]', e); }
+        return sent;
+      };
     }
 
     // ========================================================
