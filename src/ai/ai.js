@@ -16,8 +16,8 @@ function getAIStatus(){
   const apiKey=String(process.env.GEMINI_API_KEY||'').trim();
   const enabled=String(process.env.AI_ENABLED??'true').toLowerCase()!=='false';
   // Stable models only. Do not depend on retired preview aliases.
-  const model=String(process.env.GEMINI_MODEL||'gemini-2.5-flash').trim();
-  const fallbackModel=String(process.env.GEMINI_FALLBACK_MODEL||'gemini-2.5-flash-lite').trim();
+  const model=String(process.env.GEMINI_MODEL||'gemini-3.6-flash').trim();
+  const fallbackModel=String(process.env.GEMINI_FALLBACK_MODEL||'gemini-3.5-flash-lite').trim();
   return {enabled,configured:Boolean(apiKey),model,fallbackModel,keyFormat:apiKey?'configured':'missing'};
 }
 async function getAIClient(){ if(aiClientPromise)return aiClientPromise; const apiKey=String(process.env.GEMINI_API_KEY||'').trim(); if(!apiKey)throw new Error('GEMINI_API_KEY is missing from the environment.'); aiClientPromise=import('@google/genai').then(({GoogleGenAI})=>new GoogleGenAI({apiKey})).catch(e=>{aiClientPromise=null;throw e}); return aiClientPromise; }
@@ -48,7 +48,7 @@ async function generate({guild,member,history,prompt,model,mode='classic',contex
 
 async function generateWithFallback(args){
   const status=getAIStatus();
-  const candidates=[status.model,status.fallbackModel,'gemini-2.5-flash','gemini-2.5-flash-lite']
+  const candidates=[status.model,status.fallbackModel,'gemini-3.6-flash','gemini-3.5-flash-lite','gemini-2.5-flash','gemini-2.5-flash-lite']
     .map(x=>String(x||'').trim()).filter(Boolean)
     .filter((x,i,a)=>a.indexOf(x)===i);
   let lastError=null;

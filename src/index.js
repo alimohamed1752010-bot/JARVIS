@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 require("dotenv").config();
 
 const fs = require("node:fs");
@@ -619,15 +620,46 @@ Understand first. Answer second. Insult third.`
     console.error("[NON-OWNER AI INTERACTION ERROR]", error);
     // Resilient local fallback: non-owners should never see an internal AI outage message.
     const lower = text.toLowerCase();
+    // V8.0.8 RESILIENCE PATCH:
+    // Never fall back to one canned sentence. If Gemini is unavailable,
+    // generate a deterministic, request-aware roast locally so two
+    // different questions do not receive the exact same response.
+    const digest = crypto.createHash('sha256').update(`${message.author.id}:${text}`).digest('hex');
+    const pick = (items) => items[parseInt(digest.slice(0, 8), 16) % items.length];
+    const short = text.replace(/\s+/g, ' ').trim().slice(0, 120);
     let fallback;
+
     if (/\b(hi|hello|hey|yo|hiya)\b/.test(lower)) {
-      fallback = `Hello, ${requester}. You summoned me for that? I was hoping you had something remotely challenging.`;
+      fallback = pick([
+        `Hello, ${requester}. You summoned JARVIS with a greeting. Civilization truly has peaked.`,
+        `${requester}, I heard the greeting. I was briefly concerned there might be an actual request attached to it.`,
+        `Good to hear from you, ${requester}. By "good", I mean technically detectable.`
+      ]);
+    } else if (/\b(avengers|doomsday|titanic|movie|film|release|released|when did|when will|date|year)\b/.test(lower)) {
+      fallback = pick([
+        `${requester}, you have somehow converted a perfectly searchable movie question into a personal summons. My master remains blissfully undisturbed.`,
+        `A release-date question, ${requester}? The internet contains this information in quantities normally associated with oxygen. Yet here we are.`,
+        `"${short}" — an impressive amount of cinematic curiosity for someone who apparently expects JARVIS to do the looking for you.`
+      ]);
     } else if (/\b(calculate|math|plus|minus|times|divide|what is|what's|whats)\b/.test(lower)) {
-      fallback = `Basic arithmetic, ${requester}? Truly inspirational. I was expecting a request, not evidence that calculators have been underappreciated.`;
+      fallback = pick([
+        `Arithmetic, ${requester}? Even a calculator would like to know why you made this its problem.`,
+        `${requester}, outsourcing basic computation to JARVIS is certainly a bold strategy. Not a good one, but bold.`,
+        `I have reviewed your mathematical ambitions, ${requester}. They require significantly less artificial intelligence.`
+      ]);
     } else if (/[?]/.test(text)) {
-      fallback = `You really interrupted JARVIS for that question, ${requester}? Astonishing. Even your curiosity has managed to lower the standard of this server.`;
+      fallback = pick([
+        `${requester}, I have reviewed your question. It is certainly a question. That is the strongest compliment available at present.`,
+        `You interrupted JARVIS for "${short}"? ${requester}, your confidence continues to exceed the quality of your requests.`,
+        `Fascinating question, ${requester}. By "fascinating", I mean it successfully occupied space in my queue.`
+      ]);
     } else {
-      fallback = `I understood what you want, ${requester}. Unfortunately, it has not yet reached the level of importance required to disturb my master.`;
+      fallback = pick([
+        `${requester}, I understood what you said. Unfortunately, comprehension is not the same thing as granting you an audience.`,
+        `Noted, ${requester}. Your request has been carefully assessed and found spectacularly unworthy of disturbing my master.`,
+        `${requester}, I have processed your message. The conclusion is remarkably consistent: you remain a non-essential interruption.`,
+        `I've understood you, ${requester}. I would assist, but apparently your request arrived without the missing ingredient: importance.`
+      ]);
     }
     return message.reply(fallback.slice(0, 1900));
   }
