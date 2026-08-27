@@ -15,14 +15,24 @@ function cairoNow(){ return new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Ca
 function getAIStatus(){
   const apiKey=String(process.env.GEMINI_API_KEY||'').trim();
   const enabled=String(process.env.AI_ENABLED??'true').toLowerCase()!=='false';
-  const model=String(process.env.GEMINI_MODEL||'gemini-2.5-flash-lite').trim();
+  // Stable models only. Do not depend on retired preview aliases.
+  const model=String(process.env.GEMINI_MODEL||'gemini-2.5-flash').trim();
   const fallbackModel=String(process.env.GEMINI_FALLBACK_MODEL||'gemini-2.5-flash-lite').trim();
   return {enabled,configured:Boolean(apiKey),model,fallbackModel,keyFormat:apiKey?'configured':'missing'};
 }
 async function getAIClient(){ if(aiClientPromise)return aiClientPromise; const apiKey=String(process.env.GEMINI_API_KEY||'').trim(); if(!apiKey)throw new Error('GEMINI_API_KEY is missing from the environment.'); aiClientPromise=import('@google/genai').then(({GoogleGenAI})=>new GoogleGenAI({apiKey})).catch(e=>{aiClientPromise=null;throw e}); return aiClientPromise; }
 function needsLiveSearch(prompt){ return /\b(latest|current|currently|today|tonight|yesterday|tomorrow|recent|newest|release date|released|aired|episode|episodes|schedule|theater|theatre|cinema|movies? in theaters?|news|weather|price|prices|score|scores|standings|stock|market|who won|what happened|this week|this month)\b/i.test(String(prompt||'')); }
 function withTimeout(promise, ms){ return Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(Object.assign(new Error(`AI request timed out after ${ms}ms.`),{code:'AI_TIMEOUT'})),ms))]); }
-function transientError(error){ const status=Number(error?.status||error?.statusCode||0); const t=String(error?.message||error||'').toLowerCase(); return status===429||status===500||status===502||status===503||status===504||t.includes('high demand')||t.includes('temporarily unavailable')||t.includes('unavailable')||t.includes('overloaded')||t.includes('rate limit')||t.includes('timeout'); }
+function transientError(error){
+  const status=Number(error?.status||error?.statusCode||0);
+  const t=String(error?.message||error||'').toLowerCase();
+  // Treat model-not-found / invalid-model errors as fallback-eligible too.
+  // This prevents a stale Railway variable from taking the whole conversation system down.
+  const modelError=t.includes('model not found')||t.includes('not found for api version')||t.includes('unknown model')||t.includes('invalid model')||t.includes('is not found')||t.includes('unsupported model');
+  return status===400||status===404||status===429||status===500||status===502||status===503||status===504||
+    modelError||t.includes('high demand')||t.includes('temporarily unavailable')||t.includes('unavailable')||
+    t.includes('overloaded')||t.includes('rate limit')||t.includes('timeout');
+}
 
 async function generate({guild,member,history,prompt,model,mode='classic',context='',isMaster=false}){
   const ai=await getAIClient();
@@ -38,12 +48,22 @@ async function generate({guild,member,history,prompt,model,mode='classic',contex
 
 async function generateWithFallback(args){
   const status=getAIStatus();
-  try { return { text: await generate({...args,model:status.model}), model:status.model, fallback:false }; }
-  catch (first) {
-    if(!transientError(first) || status.fallbackModel===status.model) throw first;
-    console.warn(`[AI FALLBACK] ${status.model} failed; trying ${status.fallbackModel}.`);
-    return { text: await generate({...args,model:status.fallbackModel}), model:status.fallbackModel, fallback:true };
+  const candidates=[status.model,status.fallbackModel,'gemini-2.5-flash','gemini-2.5-flash-lite']
+    .map(x=>String(x||'').trim()).filter(Boolean)
+    .filter((x,i,a)=>a.indexOf(x)===i);
+  let lastError=null;
+  for(let i=0;i<candidates.length;i++){
+    const model=candidates[i];
+    try{
+      const text=await generate({...args,model});
+      return {text,model,fallback:i>0};
+    }catch(error){
+      lastError=error;
+      console.warn(`[AI MODEL ERROR] ${model}: ${error?.message||error}`);
+      if(!transientError(error)) break;
+    }
   }
+  throw lastError||new Error('No Gemini model could generate a response.');
 }
 
 async function conversationalReply({message,config,saveConfig,prompt,skipMemory=false,cooldownKey=null,mode='classic',context=''}){
