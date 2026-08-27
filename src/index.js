@@ -653,110 +653,227 @@ function memberFromMention(message) {
 function dangerousActionFromText(text) {
   const t = String(text || '').toLowerCase();
 
-  // Natural-language moderation phrases must be recognized as actions too.
-  // In particular, "time him/her/them out" was previously missed because
-  // the parser only recognized "timeout" and "time out". That caused owner
-  // requests such as "Steve swore at me, time him out" to fall through to AI.
+  // Voice moderation is deliberately separate from timeout/text mute.
+  if (/\b(?:disconnect|disconnecting)\s+(?:<@!?\d+>|[\w-]+)/.test(t) ||
+      /\b(?:pull|drag|get)\b.*\b(?:out\s+of|from)\s+(?:vc|voice|channel)\b/.test(t) ||
+      /\b(?:kick|remove)\b.*\b(?:from\s+)?(?:vc|voice)\b/.test(t)) return 'voicedisconnect';
+  if (/\b(?:move|put|send|drag)\b.*\b(?:to|into|in)\b.*\b(?:vc|voice|channel|lobby|gaming|general|music|staff)\b/.test(t) ||
+      /\b(?:move|put|send)\b\s+\S+(?:\s+\S+)*\s+\b(?:to|into|in)\b/.test(t)) return 'voicemove';
+
+  // Keep Discord moderation concepts separate:
+  // timeout = Discord communication timeout
+  // textmute = configured muted role (prevents text/chat)
+  // voicemute = Discord server mute in voice
+  // untimeout = remove timeout
+  // textunmute / voiceunmute = remove the corresponding mute
+  if (/\b(?:untimeout|un-?timeout|untime\s+(?:him|her|them|this\s+user|that\s+user|\S+)\s+out|remove\s+(?:the\s+)?timeout|remove\s+(?:their|his|her|\S+['’]s)\s+timeout|take\s+(?:the\s+)?timeout\s+off)\b/.test(t)) return 'untimeout';
+  if (/\b(?:server|voice)\s+unmute\b|\bunmute\b.*\b(?:from\s+)?(?:vc|voice|server\s+voice)\b/.test(t)) return 'voiceunmute';
+  if (/\b(?:text|chat)\s+unmute\b|\bunmute\b/.test(t)) return 'textunmute';
+  if (/\b(?:server|voice)\s+mute\b|\bmute\b.*\b(?:in|from|on)\s+(?:vc|voice|server\s+voice)\b/.test(t)) return 'voicemute';
+  if (/\b(?:text|chat)\s+mute\b/.test(t)) return 'textmute';
   if (/\b(perma(?:nent)?\s+)?ban\b/.test(t)) return 'ban';
   if (/\bkick\b/.test(t)) return 'kick';
-  if (
-    /\b(?:timeout|time\s+out|time\s+(?:him|her|them|this\s+user|that\s+user)\s+out|mute)\b/.test(t)
-  ) return 'timeout';
+  if (/\b(?:timeout|time\s+out|time\s+(?:him|her|them|this\s+user|that\s+user|\S+)\s+out)\b/.test(t)) return 'timeout';
   if (/\bwarn(?:ing)?\b/.test(t)) return 'warn';
+  // Bare "mute Steve" intentionally means TEXT mute, not timeout or voice mute.
+  if (/\bmute\b/.test(t)) return 'textmute';
+  return null;
+}
+
+function naturalVoiceMoveParts(text) {
+  const raw = String(text || '').trim();
+  const patterns = [
+    /^(?:move|put|send|drag)\s+(.+?)\s+from\s+(.+?)\s+to\s+(.+?)$/i,
+    /^(?:move|put|send|drag)\s+(.+?)\s+(?:to|into|in)\s+(.+?)$/i,
+    /^(.+?)\s+(?:move|put|send|drag)\s+(?:to|into|in)\s+(.+?)$/i
+  ];
+  for (const pattern of patterns) {
+    const m = raw.match(pattern);
+    if (!m) continue;
+    if (pattern === patterns[0]) return { target: m[1].trim(), source: m[2].trim(), destination: m[3].trim() };
+    return { target: m[1].trim(), destination: m[2].trim() };
+  }
+  const destination = raw.match(/\b(?:to|into|in)\s+(.+?)\s*$/i)?.[1]?.trim();
+  return destination ? { target: null, destination } : null;
+}
+
+function naturalVoiceDisconnectCandidate(text) {
+  const raw = String(text || '').trim();
+  const patterns = [
+    /^(?:disconnect|pull|drag)\s+(.+?)\s+(?:out\s+of|from)\s+(?:vc|voice|channel)$/i,
+    /^get\s+(.+?)\s+out\s+of\s+(?:vc|voice|channel)$/i,
+    /^(?:disconnect|pull|drag|get|remove)\s+(.+?)(?:\s+(?:from\s+)?(?:vc|voice|channel))?$/i,
+    /^(?:kick|remove)\s+(.+?)\s+(?:from\s+)?(?:vc|voice)$/i
+  ];
+  for (const pattern of patterns) {
+    const m = raw.match(pattern);
+    if (m?.[1]) return m[1].trim();
+  }
   return null;
 }
 
 async function confirmModerationAction(message, action, target, reason) {
-  const member = target;
-  const me = message.guild.members.me;
-  if (!member || !me) return false;
-  if (member.id === ownerId()) {
-    await message.reply('Absolutely not. I do not take disciplinary action against my master.');
-    return true;
-  }
-  if (member.id === message.guild.ownerId && member.id !== message.author.id) {
-    await message.reply('I cannot moderate the server owner. Discord hierarchy will not permit it.');
-    return true;
-  }
-  if (member.id === me.id || member.user?.bot && member.id === me.id) {
-    await message.reply('I shall decline to moderate myself, sir.');
-    return true;
-  }
-  const canAct = action === 'ban' ? member.bannable : action === 'kick' ? member.kickable : action === 'timeout' ? member.moderatable : true;
-  if (!canAct) { await message.reply('I cannot safely perform that action against the selected member due to Discord role hierarchy or permissions.'); return true; }
-  const label = action === 'timeout' ? '10 minute timeout' : action;
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`jarvis_confirm:${action}:${member.id}`).setLabel('CONFIRM').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId(`jarvis_cancel:${member.id}`).setLabel('CANCEL').setStyle(ButtonStyle.Secondary)
-  );
-  const reply = await message.reply({ content: `🚨 **${label.toUpperCase()}** ${member}\nReason: **${reason || 'No reason provided'}**\n\nConfirm this action?`, components: [row] });
-  const collector = reply.createMessageComponentCollector({ time: 30000, max: 1, filter: i => i.user.id === message.author.id });
-  collector.on('collect', async i => {
-    try {
-      if (i.customId.startsWith('jarvis_cancel:')) { await i.update({ content: 'Cancelled, sir.', components: [] }); return; }
-      let result;
-      if (action === 'ban') result = await member.ban({ reason: `JARVIS: ${reason || 'No reason provided'}` });
-      else if (action === 'kick') result = await member.kick(`JARVIS: ${reason || 'No reason provided'}`);
-      else if (action === 'timeout') result = await member.timeout(10 * 60 * 1000, `JARVIS: ${reason || 'No reason provided'}`);
-      else { addWarning(message.guild.id, member.id, reason || 'No reason provided', message.author.tag); result = true; }
-      const c = addCase(message.guild.id, { action: action.toUpperCase(), userId: member.id, moderatorId: message.author.id, reason: reason || 'No reason provided' });
-      await logEvent(message.guild, `🛡️ JARVIS executed **${action.toUpperCase()}** on **${member.user.tag}** — Case #${c.id}`);
-      await i.update({ content: `✅ ${action.toUpperCase()} completed for **${member.user.tag}**. Case #${c.id}.`, components: [] });
-    } catch (error) { console.error('[JARVIS ACTION ERROR]', error); await i.update({ content: `❌ I could not complete that action: ${String(error?.message || error).slice(0, 300)}`, components: [] }).catch(() => {}); }
-  });
+  // Natural-language owner moderation executes directly. This function is
+  // retained for the legacy fallback path and now understands the same
+  // distinct moderation actions.
+  const result = await executeModerationAction(message, action, target, reason);
+  await message.reply(result.text);
   return true;
 }
 
-function calculateSimpleMath(text) {
-  const expr = String(text || '').replace(/,/g,'').match(/(?:what\s+is\s+)?(-?\d+(?:\.\d+)?)\s*(x|\*|×|\+|minus|\-|÷|\/|%)\s*(-?\d+(?:\.\d+)?)/i);
-  if (!expr) return null;
-  const a=Number(expr[1]), op=expr[2].toLowerCase(), b=Number(expr[3]); let value;
-  if(op==='x'||op==='*'||op==='×') value=a*b; else if(op==='+') value=a+b; else if(op==='minus'||op==='-') value=a-b; else if(op==='÷'||op==='/') value=b===0?null:a/b; else if(op==='%') value=a%b;
-  if(value===null || !Number.isFinite(value)) return null;
-  return Number.isInteger(value)?String(value):String(Number(value.toFixed(10)));
-}
-
-async function liveDiscordContext(message, input) {
-  const text=String(input||'').trim();
-  if (/\b(?:can you|do you)\s+(?:see|access|view)\s+(?:the )?(?:member|server)\s*list\b|\bmember list\b/i.test(text)) { const members=await discordTools.fetchAllMembers(message.guild); return `Yes, sir. I can query the live member roster. I currently have **${members.size}** members available to inspect.`; }
-  if (/\b(?:who(?:'s| is)|which members are)\s+(?:currently\s+)?online\b|\bonline members\b|\blist (?:the )?(?:online|active) members\b/i.test(text)) {
-    const online=await discordTools.onlineMembers(message.guild); const names=online.map(m=>`${m.displayName}${m.user.bot?' [BOT]':''}`);
-    if(!names.length) return 'There are currently no members with a visible online presence.';
-    return `There are **${names.length}** members currently online:\n${names.slice(0,80).map(n=>`• ${n}`).join('\n')}${names.length>80?'\n• …and more':''}`;
-  }
-  const find=text.match(/\b(?:find|search for|look for|locate)\s+(.+)$/i);
-  if(find){ await discordTools.fetchAllMembers(message.guild); const q=find[1].replace(/[?.!]+$/,'').trim(); const found=await discordTools.findMembers(message.guild,q); if(!found.size)return `I couldn't find a member matching **${q}**, sir.`; return `I found ${found.size>1?'several members':'a member'} matching **${q}**:\n${found.first(10).map(m=>`• **${m.displayName}** — ${m.user.tag} — ${m.presence?.status||'offline'} — ${m.roles.cache.filter(r=>r.id!==message.guild.id).map(r=>r.name).join(', ')||'No roles'}`).join('\n')}`; }
-  const roleQ=text.match(/\b(?:what roles does|which roles does)\s+(.+?)\s+(?:have|has)\??$/i);
-  if(roleQ){ const m=await discordTools.getMember(message.guild,roleQ[1]); if(!m)return `I couldn't find **${roleQ[1]}**, sir.`; return `**${m.displayName}** has: ${m.roles.cache.filter(r=>r.id!==message.guild.id).map(r=>r.name).join(', ')||'no additional roles'}.`; }
-  if(/\bhow many (?:people|members)\b|\bmember count\b|\bhow big is (?:the|this) server\b/i.test(text)) { const o=await discordTools.getServerOverview(message.guild); return `This server currently has **${o.members}** members, of whom **${o.bots}** are bots. **${o.online}** have a visible online presence, sir.`; }
-  if(/\banalytics\b|\bserver statistics\b|\bmost active members?\b/i.test(text)){ const top=getTopUsers(message.guild.id,5); return `**JARVIS Server Analytics**\nMessages observed since startup: **${top.reduce((n,x)=>n+x.count,0)}**\nTop active members:\n${top.length?top.map(x=>`• <@${x.userId}> — ${x.count} messages`).join('\n'):'No activity recorded yet.'}`; }
-  if(/\b(?:what|which) roles (?:are|do we have)\b|\blist (?:the )?roles\b/i.test(text)) { const roles=message.guild.roles.cache.sort((a,b)=>b.position-a.position).map(r=>r.name).filter(n=>n!=='@everyone'); return `The server has **${roles.length}** roles:\n${roles.slice(0,80).map(r=>`• ${r}`).join('\n')}`; }
-  if(/\b(?:what|which) channels (?:are|do we have)\b|\blist (?:the )?channels\b/i.test(text)) { const channels=message.guild.channels.cache.filter(c=>c.type!==ChannelType.GuildCategory).sort((a,b)=>a.position-b.position); return `The server has **${channels.size}** non-category channels:\n${channels.map(c=>`• #${c.name}`).slice(0,80).join('\n')}`; }
-  const recent=text.match(/\b(?:what did|show me)\s+(?:the )?(?:last|recent)\s+(\d+)\s+messages?\b/i);
-  if(recent){ const msgs=await discordTools.getRecentMessages(message.channel,Math.min(Number(recent[1]),25)); return msgs.length?msgs.map(m=>`• **${m.author}**: ${m.content||'[no text]'}`).join('\n'):'No messages available.'; }
-  return null;
-}
-
 async function executeModerationAction(message, action, member, reason, durationMs = 10 * 60 * 1000) {
-  const me = message.guild.members.me;
+  const me = message.guild?.members?.me;
   if (!member || !me) return { ok:false, text:'I could not resolve the member or my own server member, sir.' };
   if (member.id === ownerId()) return { ok:false, text:'Absolutely not. I do not take disciplinary action against my master.' };
   if (member.id === message.guild.ownerId && member.id !== message.author.id) return { ok:false, text:'I cannot moderate the server owner. Discord hierarchy will not permit it.' };
   if (member.id === me.id) return { ok:false, text:'I shall decline to moderate myself, sir.' };
-  const canAct = action === 'ban' ? member.bannable : action === 'kick' ? member.kickable : action === 'timeout' ? member.moderatable : true;
-  if (!canAct) return { ok:false, text:'I cannot safely perform that action because of Discord role hierarchy or missing permissions.' };
+
   try {
     let label = action.toUpperCase();
-    if (action === 'ban') await member.ban({ reason: `JARVIS: ${reason || 'Owner-directed moderation'}` });
-    else if (action === 'kick') await member.kick(`JARVIS: ${reason || 'Owner-directed moderation'}`);
-    else if (action === 'timeout') {
+
+    if (action === 'ban') {
+      if (!member.bannable) return { ok:false, text:'I cannot safely ban that member because of Discord role hierarchy or missing permissions.' };
+      await member.ban({ reason: `JARVIS: ${reason || 'Owner-directed moderation'}` });
+      label = 'BAN';
+    } else if (action === 'kick') {
+      if (!member.kickable) return { ok:false, text:'I cannot safely kick that member because of Discord role hierarchy or missing permissions.' };
+      await member.kick(`JARVIS: ${reason || 'Owner-directed moderation'}`);
+      label = 'KICK';
+    } else if (action === 'timeout') {
+      if (!message.member?.permissions?.has(PermissionsBitField.Flags.ModerateMembers)) return { ok:false, text:'I need Moderate Members permission to apply a timeout, sir.' };
+      if (!member.moderatable) return { ok:false, text:'I cannot safely timeout that member because of Discord role hierarchy or missing permissions.' };
       const safeDuration = Math.min(Math.max(Number(durationMs) || 10 * 60 * 1000, 1000), 28 * 24 * 60 * 60 * 1000);
       await member.timeout(safeDuration, `JARVIS: ${reason || 'Owner-directed moderation'}`);
       label = `${Math.round(safeDuration / 60000)} MINUTE TIMEOUT`;
-    } else addWarning(message.guild.id, member.id, reason || 'Owner-directed moderation', message.author.tag);
-    const c = addCase(message.guild.id, { action: action.toUpperCase(), userId: member.id, moderatorId: message.author.id, reason: reason || 'Owner-directed moderation', evidence: { channelId: message.channel.id, messageId: message.id, source: 'natural-language-owner-command' } });
+    } else if (action === 'untimeout') {
+      if (!message.member?.permissions?.has(PermissionsBitField.Flags.ModerateMembers)) return { ok:false, text:'I need Moderate Members permission to remove a timeout, sir.' };
+      if (!member.moderatable) return { ok:false, text:'I cannot remove that timeout because of Discord role hierarchy or missing permissions.' };
+      await member.timeout(null, `JARVIS: ${reason || 'Owner-directed timeout removal'}`);
+      label = 'TIMEOUT REMOVED';
+    } else if (action === 'voicedisconnect') {
+      if (!me.permissions.has(PermissionsBitField.Flags.MoveMembers)) {
+        return { ok:false, text:'I need **Move Members** permission to disconnect members from voice, sir.' };
+      }
+      if (!member.voice?.channel) {
+        return { ok:false, text:`**${member.user.tag}** is not currently in a voice channel, sir.` };
+      }
+      const from = member.voice.channel.name;
+      await member.voice.disconnect(`JARVIS: ${message.author.tag} — ${reason || 'Owner-directed voice disconnect'}`);
+      label = 'VOICE DISCONNECT';
+      // Preserve the channel in the audit case below.
+      reason = reason || `Disconnected from ${from}.`;
+    } else if (action === 'voicemove') {
+      if (!me.permissions.has(PermissionsBitField.Flags.MoveMembers)) {
+        return { ok:false, text:'I need **Move Members** permission to move members between voice channels, sir.' };
+      }
+      if (!member.voice?.channel) {
+        return { ok:false, text:`**${member.user.tag}** is not currently in a voice channel, so I cannot move them, sir.` };
+      }
+
+      const parts = naturalVoiceMoveParts(message.content.replace(/^jarvis\s+/i, '').trim());
+      const destinationQuery = parts?.destination;
+      if (!destinationQuery) {
+        return { ok:false, text:'Which voice channel should I move them to, sir?' };
+      }
+
+      const voiceChannels = message.guild.channels.cache.filter(c =>
+        c.isVoiceBased() && [ChannelType.GuildVoice, ChannelType.GuildStageVoice].includes(c.type)
+      );
+      const cleanDestination = destinationQuery
+        .replace(/^<#[0-9]+>\s*$/, '')
+        .replace(/\b(?:vc|voice\s+channel|channel)\b$/i, '')
+        .trim();
+
+      const mentionedChannel = destinationQuery.match(/^<#(\d+)>$/)?.[1];
+      let matches = mentionedChannel
+        ? voiceChannels.filter(c => c.id === mentionedChannel)
+        : voiceChannels.filter(c => c.name.toLowerCase() === cleanDestination.toLowerCase());
+
+      if (!matches.size) {
+        matches = voiceChannels.filter(c =>
+          c.name.toLowerCase().includes(cleanDestination.toLowerCase())
+        );
+      }
+
+      if (!matches.size) {
+        return {
+          ok:false,
+          text:`I couldn't find a voice channel matching **${cleanDestination}**, sir.`
+        };
+      }
+
+      if (matches.size > 1) {
+        const choices = [...matches.values()].slice(0, 10).map(c => `• **${c.name}**`).join('\n');
+        return {
+          ok:false,
+          text:`I found multiple voice channels matching **${cleanDestination}**. Please specify one:\n${choices}`
+        };
+      }
+
+      const destination = matches.first();
+      if (member.voice.channelId === destination.id) {
+        return { ok:false, text:`**${member.user.tag}** is already in **${destination.name}**, sir.` };
+      }
+
+      await member.voice.setChannel(destination, `JARVIS: ${message.author.tag} — ${reason || 'Owner-directed voice move'}`);
+      label = `VOICE MOVE → ${destination.name}`;
+      reason = reason || `Moved to ${destination.name}.`;
+    } else if (action === 'textmute') {
+      if (!message.member?.permissions?.has(PermissionsBitField.Flags.ManageRoles)) return { ok:false, text:'I need Manage Roles permission to apply a text mute, sir.' };
+      const config = getConfig(message.guild.id);
+      if (!config.muteRoleId) return { ok:false, text:'No text-mute role is configured. Use `jarvis setmuterole @Muted` first, sir.' };
+      const role = message.guild.roles.cache.get(String(config.muteRoleId));
+      if (!role) return { ok:false, text:'The configured text-mute role no longer exists, sir. Please configure it again.' };
+      if (role.position >= me.roles.highest.position) return { ok:false, text:'I cannot assign the text-mute role because its role is above my highest role.' };
+      await member.roles.add(role, `JARVIS: ${message.author.tag} — ${reason || 'Owner-directed text mute'}`);
+      label = 'TEXT MUTE';
+    } else if (action === 'textunmute') {
+      if (!message.member?.permissions?.has(PermissionsBitField.Flags.ManageRoles)) return { ok:false, text:'I need Manage Roles permission to remove a text mute, sir.' };
+      const config = getConfig(message.guild.id);
+      if (!config.muteRoleId) return { ok:false, text:'No text-mute role is configured, sir.' };
+      const role = message.guild.roles.cache.get(String(config.muteRoleId));
+      if (!role) return { ok:false, text:'The configured text-mute role no longer exists, sir.' };
+      if (role.position >= me.roles.highest.position) return { ok:false, text:'I cannot remove that text-mute role because its role is above my highest role.' };
+      await member.roles.remove(role, `JARVIS: ${message.author.tag} — ${reason || 'Owner-directed text unmute'}`);
+      label = 'TEXT MUTE REMOVED';
+    } else if (action === 'voicemute' || action === 'voiceunmute') {
+      if (!message.member?.permissions?.has(PermissionsBitField.Flags.MuteMembers)) return { ok:false, text:'I need Mute Members permission for a server voice mute, sir.' };
+      if (!member.voice?.channel) return { ok:false, text:`**${member.user.tag}** is not currently in a voice channel, so I cannot ${action === 'voicemute' ? 'server-mute' : 'server-unmute'} them.` };
+      if (action === 'voicemute') {
+        await member.voice.setMute(true, `JARVIS: ${message.author.tag} — ${reason || 'Owner-directed server mute'}`);
+        label = 'SERVER MUTE';
+      } else {
+        await member.voice.setMute(false, `JARVIS: ${message.author.tag} — ${reason || 'Owner-directed server unmute'}`);
+        label = 'SERVER MUTE REMOVED';
+      }
+    } else {
+      addWarning(message.guild.id, member.id, reason || 'Owner-directed moderation', message.author.tag);
+      label = 'WARNING';
+    }
+
+    const caseAction = action.toUpperCase();
+    const c = addCase(message.guild.id, {
+      action: caseAction,
+      userId: member.id,
+      moderatorId: message.author.id,
+      reason: reason || 'Owner-directed moderation',
+      evidence: { channelId: message.channel.id, messageId: message.id, source: 'natural-language-owner-command' }
+    });
     await logEvent(message.guild, `🛡️ JARVIS executed **${label}** on **${member.user.tag}** — Case #${c.id}`);
-    return { ok:true, text:`Done, sir. I handled **${member.user.tag}** with a **${label.toLowerCase()}**. Case #${c.id}.` };
+    const natural = {
+      'TIMEOUT': 'a 10 minute timeout',
+      'UNTIMEOUT': 'timeout removal',
+      'TEXTMUTE': 'a text mute',
+      'TEXTUNMUTE': 'text mute removal',
+      'VOICEMUTE': 'a server voice mute',
+      'VOICEUNMUTE': 'server voice mute removal',
+      'VOICEDISCONNECT': 'a voice disconnect',
+      'VOICEMOVE': 'a move to another voice channel',
+      'BAN': 'a ban',
+      'KICK': 'a kick',
+      'WARN': 'a warning'
+    }[caseAction] || label.toLowerCase();
+    return { ok:true, text:`Done, sir. I handled **${member.user.tag}** with **${natural}**. Case #${c.id}.` };
   } catch (error) {
     console.error('[JARVIS NATURAL MODERATION ERROR]', error);
     return { ok:false, text:`I understood the instruction, sir, but Discord rejected the action: ${String(error?.message || error).slice(0, 280)}` };
@@ -771,8 +888,8 @@ async function resolveNaturalMember(message, candidate) {
     .replace(/[,.!?]+$/, '')
     .trim();
   if (!cleaned) return null;
-  // Mentions and IDs are always authoritative.
   const mentioned = message.mentions.members.find(m => m.id === cleaned) || message.mentions.members.first();
+  if (mentioned) return mentioned;
   if (/^\d{15,25}$/.test(cleaned)) return message.guild.members.cache.get(cleaned) || await message.guild.members.fetch(cleaned).catch(() => null);
   await discordTools.fetchAllMembers(message.guild);
   const members = message.guild.members.cache;
@@ -790,7 +907,6 @@ async function resolveNaturalMember(message, candidate) {
     (m.user.globalName || '').toLowerCase().includes(q) ||
     m.displayName.toLowerCase().includes(q)
   );
-  // Never guess among unrelated partial matches.
   return partial.size === 1 ? partial.first() : null;
 }
 
@@ -804,51 +920,92 @@ function parseNaturalDuration(text, fallback = 10 * 60 * 1000) {
 }
 
 function isUndoTimeoutRequest(text) {
-  return /\b(?:untimeout|un-timeout|remove\s+(?:the\s+)?timeout|remove\s+(?:their|his|her)\s+timeout|unmute|unmute\s+them|take\s+(?:the\s+)?mute\s+off)\b/i.test(String(text || ''));
+  return /\b(?:untimeout|un-?timeout|untime\s+(?:him|her|them|this\s+user|that\s+user|\S+)\s+out|remove\s+(?:the\s+)?timeout|remove\s+(?:their|his|her|\S+['’]s)\s+timeout|take\s+(?:the\s+)?timeout\s+off)\b/i.test(String(text || ''));
+}
+
+function latestTimeoutTarget(message) {
+  const config = getConfig(message.guild.id);
+  const cases = Array.isArray(config.cases) ? config.cases : [];
+  for (let i = cases.length - 1; i >= 0; i--) {
+    const c = cases[i];
+    if (String(c.action || '').toUpperCase() !== 'TIMEOUT') continue;
+    if (c.moderatorId && String(c.moderatorId) !== String(message.author.id)) continue;
+    const member = message.guild.members.cache.get(String(c.userId));
+    if (member) return member;
+  }
+  return null;
+}
+
+function naturalActionTargetCandidate(text) {
+  const patterns = [
+    /^time\s+(.+?)\s+out(?:\s+(?:for|because|reason)\b|$)/i,
+    /^(?:untime|untimeout|un-timeout)\s+(.+?)\s+out(?:\s+(?:for|because|reason)\b|$)/i,
+    /^(?:(?:server|voice)\s+)?(?:unmute)\s+(.+?)(?:\s+(?:for|because|reason)\b|$)/i,
+    /^(?:(?:server|voice)\s+)?(?:text|chat)\s+mute\s+(.+?)(?:\s+(?:for|because|reason)\b|$)/i,
+    /^(?:(?:server|voice)\s+)?mute\s+(.+?)(?:\s+(?:for|because|reason)\b|$)/i,
+    /^(?:timeout|time\s*out|time\s+.+?\s+out)\s+(.+?)(?:\s+(?:for|because|reason)\b|$)/i,
+    /^(?:warn|warning|kick|ban)\s+(.+?)(?:\s+(?:for|because|reason)\b|$)/i,
+    /^(?:remove|clear)\s+(.+?)(?:['’]s)?\s+(?:timeout|mute)\b/i
+  ];
+  for (const pattern of patterns) {
+    const m = String(text || '').match(pattern);
+    if (m?.[1]) return m[1].trim();
+  }
+  return null;
 }
 
 async function understandOwnerModeration(message, text) {
   const lower = String(text || '').toLowerCase();
   let target = memberFromMention(message);
   let action = dangerousActionFromText(text);
-  if (isUndoTimeoutRequest(text)) action = 'untimeout';
   let durationMs = parseNaturalDuration(text);
 
-  // Explicit natural-language target forms: "timeout Steve", "insult Steve",
-  // "Steve is spamming, handle it", "untimeout Steve", etc.
-  if (!target) {
-    const candidates = [
-      text.match(/^(?:timeout|time\s*out|mute|warn|warning|kick|ban|untimeout|un-timeout|unmute)\s+(.+?)(?:\s+(?:for|because|reason)\b|$)/i)?.[1],
-      text.match(/^(?:insult|roast|flame|cook|clown)\s+(.+?)$/i)?.[1],
-      text.match(/^(?:handle|deal with|take care of|do something about)\s+(.+?)(?:\s+(?:is|has been|keeps|was)\s+|$)/i)?.[1],
-      text.match(/^(.+?)\s+(?:is|has been|keeps|kept|was)\s+(?:spamming|flooding|spam|annoying|harassing|advertising|scamming|trolling)\b/i)?.[1],
-      text.match(/^(.+?)\s+(?:is|has been|keeps)\s+/i)?.[1]
-    ].filter(Boolean);
-    for (const candidate of candidates) {
-      target = await resolveNaturalMember(message, candidate);
-      if (target) break;
+  // Voice moves need a destination as well as a member. Resolve the member
+  // first, then let the executor resolve/validate the destination channel.
+  if (action === 'voicemove') {
+    const parts = naturalVoiceMoveParts(text);
+    if (!target && parts?.target) target = await resolveNaturalMember(message, parts.target);
+
+    // Target-first phrasing: find a named member in the sentence.
+    if (!target) {
+      await discordTools.fetchAllMembers(message.guild);
+      const lowerText = text.toLowerCase();
+      for (const m of message.guild.members.cache.values()) {
+        const names = [m.user.username, m.user.globalName, m.displayName, m.user.tag].filter(Boolean);
+        if (names.some(name => lowerText.includes(String(name).toLowerCase()))) {
+          target = m;
+          break;
+        }
+      }
     }
   }
 
-  // Natural-language owner commands often put the target first and the
-  // moderation action later: "Steve swore at me, time him out" or
-  // "Steve was annoying, kick him". Resolve that form before handing the
-  // message to the conversational AI. We deliberately inspect the live
-  // member roster rather than guessing from arbitrary words.
+  if (action === 'voicedisconnect' && !target) {
+    const candidate = naturalVoiceDisconnectCandidate(text);
+    if (candidate) target = await resolveNaturalMember(message, candidate);
+  }
+
+  // Explicit command forms: timeout Steve, server mute Steve, mute Steve,
+  // text mute Steve, unmute Steve, untime Steve out, etc.
+  if (!target) {
+    const candidate = naturalActionTargetCandidate(text);
+    if (candidate) target = await resolveNaturalMember(message, candidate);
+  }
+
+  // Target-first natural language: "Steve swore at me, time him out",
+  // "Steve is in VC, server mute him", "Steve is spamming, mute him".
   if (!target) {
     await discordTools.fetchAllMembers(message.guild);
     const members = message.guild.members.cache.filter(m => !m.user.bot || m.id !== message.guild.members.me?.id);
-    const ordered = [...members.values()].sort((a, b) => {
-      const aNames = [a.user.username, a.user.globalName, a.displayName, a.user.tag].filter(Boolean).map(x => String(x).toLowerCase());
-      const bNames = [b.user.username, b.user.globalName, b.displayName, b.user.tag].filter(Boolean).map(x => String(x).toLowerCase());
-      const score = (names) => names.reduce((best, name) => {
-        const pos = lower.indexOf(name);
-        return pos >= 0 ? Math.max(best, name.length * 10 - pos) : best;
-      }, -1);
-      return score(bNames) - score(aNames);
-    });
-    const actionWords = /\b(?:time\s+him\s+out|time\s+her\s+out|time\s+them\s+out|time\s+this\s+user\s+out|time\s+that\s+user\s+out|timeout|time\s*out|mute|kick|ban|warn(?:ing)?)\b/i;
+    const actionWords = /\b(?:server\s+mute|voice\s+mute|text\s+mute|chat\s+mute|time\s+(?:him|her|them|this\s+user|that\s+user)\s+out|untime(?:out)?|unmute|timeout|time\s*out|mute|disconnect|pull|drag|get\s+.+\s+out|move|put|send|kick|ban|warn(?:ing)?)\b/i;
     if (action && actionWords.test(text)) {
+      const ordered = [...members.values()].sort((a, b) => {
+        const score = (m) => [m.user.username, m.user.globalName, m.displayName, m.user.tag].filter(Boolean).reduce((best, name) => {
+          const pos = lower.indexOf(String(name).toLowerCase());
+          return pos >= 0 ? Math.max(best, name.length * 10 - pos) : best;
+        }, -1);
+        return score(b) - score(a);
+      });
       for (const m of ordered) {
         const names = [m.user.username, m.user.globalName, m.displayName, m.user.tag].filter(Boolean);
         if (names.some(name => new RegExp(`(?:^|\\s|[^a-z0-9_])${String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|\\s|[^a-z0-9_])`, 'i').test(text))) {
@@ -858,34 +1015,45 @@ async function understandOwnerModeration(message, text) {
       }
     }
   }
+
+  // Pronoun-only timeout removal refers to the latest timeout JARVIS created
+  // for this owner. We do the same for explicit "him/her/them" action phrases
+  // when no member name is present.
+  if (!target && action === 'untimeout' && /\b(?:him|her|them|this\s+user|that\s+user)\b/i.test(text)) {
+    target = latestTimeoutTarget(message);
+  }
+
   if (!target) return false;
 
-  // This function is moderation only. Roast requests are handled separately,
-  // but we intentionally resolve the target here so "jarvis insult Steve"
-  // can use the same natural member resolver.
-  if (action === 'untimeout') {
-    if (target.id === ownerId()) { await message.reply('Absolutely not. I do not alter disciplinary status for my master.'); return true; }
-    if (target.id === message.guild.ownerId) { await message.reply('I cannot alter the server owner\'s timeout status, sir.'); return true; }
-    if (target.id === message.guild.members.me?.id) { await message.reply('I shall decline to alter my own moderation status, sir.'); return true; }
-    if (!target.moderatable) { await message.reply('I cannot remove that timeout because of Discord role hierarchy or permissions.'); return true; }
-    try {
-      await target.timeout(null, 'JARVIS: Owner-directed timeout removal');
-      const c = addCase(message.guild.id, { action: 'UNTIMEOUT', userId: target.id, moderatorId: message.author.id, reason: 'Owner-directed timeout removal', evidence: { channelId: message.channel.id, messageId: message.id, source: 'natural-language-owner-command' } });
-      await logEvent(message.guild, `🛡️ JARVIS removed timeout from **${target.user.tag}** — Case #${c.id}`);
-      await message.reply(`Done, sir. I removed **${target.user.tag}**'s timeout. Case #${c.id}.`);
-    } catch (e) { console.error('[JARVIS UNTIMEOUT ERROR]', e); await message.reply(`I understood the instruction, sir, but Discord rejected it: ${String(e.message || e).slice(0,280)}`); }
+  if (action === 'untimeout' && target.id === ownerId()) {
+    await message.reply('Absolutely not. I do not alter disciplinary status for my master.');
+    return true;
+  }
+  if (action === 'untimeout' && target.id === message.guild.ownerId) {
+    await message.reply('I cannot alter the server owner\'s timeout status, sir.');
+    return true;
+  }
+  if (action === 'untimeout' && target.id === message.guild.members.me?.id) {
+    await message.reply('I shall decline to alter my own moderation status, sir.');
     return true;
   }
 
-  // If this is a roast request, let the owner-roast handler perform the roast.
-  if (isInsultRequest(text) && !action) return false;
+  // For an explicit "unmute" with no qualifier, use TEXT MUTE. This keeps
+  // text mute, server mute, and timeout completely separate.
+  if (action === 'textunmute' || action === 'voiceunmute') {
+    const result = await executeModerationAction(message, action, target, 'Owner-directed moderation', durationMs);
+    await message.reply(result.text);
+    return true;
+  }
 
+  // Moderation offenses imply a timeout only when no explicit moderation
+  // action was requested.
   if (!action) {
     if (/\b(spam|spamming|flood|flooding|advertis|raid|message\s+spam)\b/i.test(lower)) action = 'timeout';
     else if (/\b(harass|harassing|harassment|threaten|threatening)\b/i.test(lower)) action = 'timeout';
     else if (/\b(scam|scamming|phish|phishing)\b/i.test(lower)) action = 'timeout';
-    else if (/\b(kick|remove)\b/i.test(lower)) action = 'kick';
-    else if (/\b(ban)\b/i.test(lower)) action = 'ban';
+    else if (/\bkick\b/i.test(lower)) action = 'kick';
+    else if (/\bban\b/i.test(lower)) action = 'ban';
   }
   if (!action) return false;
 
@@ -912,7 +1080,7 @@ async function handleOwnerToolRequest(message, input) {
   const action = dangerousActionFromText(text);
   let target = memberFromMention(message);
   if (!target && action) {
-    const candidate = text.match(/^(?:ban|kick|timeout|time\s*out|mute|warn|warning)\s+(.+?)(?:\s+(?:for|because|reason)\b|$)/i)?.[1];
+    const candidate = naturalActionTargetCandidate(text);
     if (candidate) target = await resolveNaturalMember(message, candidate);
   }
   if (action && target) {
