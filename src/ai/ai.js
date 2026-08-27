@@ -176,22 +176,23 @@ async function parseCommandIntent({message,prompt}) {
   const status=getAIStatus();
   if(!status.enabled || !status.configured) return null;
   const instruction=`You are JARVIS V9's command router. Parse the user's Discord command into JSON only. Never execute it. Return exactly one object using this schema:
-{"action":"voicemove|voicedisconnect|voicemute|voiceunmute|voicedeafen|voiceundeafen|textmute|textunmute|timeout|untimeout|kick|ban|diagnostics|history|undo|simulate|awareness|unknown","targets":[],"excludeTargets":[],"source":"","destination":"","reason":"","durationMs":600000,"caseId":null,"raw":""}
+{"action":"voicemove|voicedisconnect|voicemute|voiceunmute|voicedeafen|voiceundeafen|textmute|textunmute|timeout|untimeout|kick|ban|permgrant|permdeny|diagnostics|history|undo|simulate|awareness|unknown","targets":[],"excludeTargets":[],"source":"","destination":"","reason":"","durationMs":600000,"caseId":null,"raw":"","permission":""}
 Rules:
 - Preserve member names exactly as spoken. Use "me" or "everyone" when spoken.
 - For voice moves, destination is the requested voice channel name.
 - "server mute" => voicemute; "server unmute" => voiceunmute.
 - "deafen" => voicemute and "undeafen" => voiceunmute only if server voice mute is the closest supported action.
 - timeout durations must be milliseconds, capped at 28 days.
+- permgrant/permdeny is for requests to grant, allow, permit, revoke, prohibit, prevent, block, forbid, or restrict a Discord permission (e.g. soundboard, sending messages, kicking members, administrator) for a specific member or role. targets[0] must be exactly that member or role reference (preserve any role mention/name, including a trailing "role" word if spoken). "permission" must be the permission phrase exactly as spoken (e.g. "soundboard", "sending messages", "administrator"). destination, if given, is an optional specific channel to scope the change to.
 - If the input is not a command, return action=unknown.
-- Never invent a target, channel, reason, or ID.
+- Never invent a target, channel, permission, reason, or ID.
 USER REQUEST: ${String(prompt||'').slice(0,1400)}`;
   try {
     const result=await generateWithFallback({guild:message.guild,member:message.member,history:[],prompt:instruction,mode:'professional',context:'STRICT JSON ONLY. This is command parsing, not conversation.',isMaster:true});
     const raw=String(result.text||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
     const parsed=JSON.parse(raw);
     if(!parsed || typeof parsed.action!=='string') return null;
-    return {action:parsed.action,targets:Array.isArray(parsed.targets)?parsed.targets.map(x=>String(x).trim()).filter(Boolean).slice(0,20):[],excludeTargets:Array.isArray(parsed.excludeTargets)?parsed.excludeTargets.map(x=>String(x).trim()).filter(Boolean).slice(0,20):[],source:String(parsed.source||'').trim(),destination:String(parsed.destination||'').trim(),reason:String(parsed.reason||'').trim().slice(0,500),durationMs:Number(parsed.durationMs)||600000,caseId:parsed.caseId??null,raw:String(parsed.raw||prompt).slice(0,1400)};
+    return {action:parsed.action,targets:Array.isArray(parsed.targets)?parsed.targets.map(x=>String(x).trim()).filter(Boolean).slice(0,20):[],excludeTargets:Array.isArray(parsed.excludeTargets)?parsed.excludeTargets.map(x=>String(x).trim()).filter(Boolean).slice(0,20):[],source:String(parsed.source||'').trim(),destination:String(parsed.destination||'').trim(),reason:String(parsed.reason||'').trim().slice(0,500),durationMs:Number(parsed.durationMs)||600000,caseId:parsed.caseId??null,raw:String(parsed.raw||prompt).slice(0,1400),permission:String(parsed.permission||'').trim()};
   } catch(error) {
     console.warn('[AI COMMAND ROUTER] Falling back to deterministic parser:',error?.message||error);
     return null;

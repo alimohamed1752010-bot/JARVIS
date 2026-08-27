@@ -21,7 +21,9 @@ function check({guild, actor, bot, action, target}) {
     role_add: PermissionsBitField.Flags.ManageRoles,
     role_remove: PermissionsBitField.Flags.ManageRoles,
     channel_edit: PermissionsBitField.Flags.ManageChannels,
-    lockdown: PermissionsBitField.Flags.ManageChannels
+    lockdown: PermissionsBitField.Flags.ManageChannels,
+    permgrant: PermissionsBitField.Flags.ManageRoles,
+    permdeny: PermissionsBitField.Flags.ManageRoles
   }[action];
   if (required && !has(bot, required)) return {ok:false,code:'BOT_PERMISSION',message:`I need **${({[PermissionsBitField.Flags.BanMembers]:'Ban Members',[PermissionsBitField.Flags.KickMembers]:'Kick Members',[PermissionsBitField.Flags.ModerateMembers]:'Moderate Members',[PermissionsBitField.Flags.ManageRoles]:'Manage Roles',[PermissionsBitField.Flags.MuteMembers]:'Mute Members',[PermissionsBitField.Flags.DeafenMembers]:'Deafen Members',[PermissionsBitField.Flags.MoveMembers]:'Move Members',[PermissionsBitField.Flags.ManageChannels]:'Manage Channels'}[required]||'the required permission')}** permission to perform that action.`};
   if (target && bot && ['ban','kick','timeout','untimeout','voicemute','voiceunmute','voicedeafen','voiceundeafen','textmute','textunmute'].includes(action)) {

@@ -1,6 +1,7 @@
 const {parseCommandIntent}=require('../ai');
-const {resolveMember,resolveChannel,splitTargets}=require('./resolver');
-const {execute,undo}=require('./executor');
+const {resolveMember,resolveChannel,resolveTargetEntity,splitTargets}=require('./resolver');
+const {execute,undo,executePermissionChange}=require('./executor');
+const {findPermission}=require('./permissionCatalog');
 const context=require('./context');
 const confirmations=require('./confirmations');
 const journal=require('./journal');
@@ -9,7 +10,7 @@ const simulator=require('./simulator');
 const {createDefaultRegistry}=require('./toolRegistry');
 const toolRegistry=createDefaultRegistry();
 
-const ACTION_WORDS=/\b(move|disconnect|deafen|undeafen|mute|unmute|timeout|untimeout|kick|ban|warn|simulate|undo|history|diagnostics|status|who|everyone|except)\b/i;
+const ACTION_WORDS=/\b(move|disconnect|deafen|undeafen|mute|unmute|timeout|untimeout|kick|ban|warn|simulate|undo|history|diagnostics|status|who|everyone|except|prohibit|prevent|forbid|restrict|allow|permit|grant|give)\b/i;
 
 function parseDuration(text){const m=String(text).match(/(?:for\s*)?(\d+(?:\.\d+)?)\s*(s|m|h|d)\b/i);if(!m)return 10*60*1000;const n=Number(m[1]);const mult={s:1000,m:60000,h:3600000,d:86400000}[m[2].toLowerCase()];return Math.min(Math.max(n*mult,1000),28*24*60*60*1000);}
 function normalizeAction(a){return ({move_voice:'voicemove',move:'voicemove',disconnect:'voicedisconnect',deafen:'voicedeafen',undeafen:'voiceundeafen',mute:'voicemute',unmute:'voiceunmute',server_mute:'voicemute',server_unmute:'voiceunmute',timeout:'timeout',untimeout:'untimeout',kick:'kick',ban:'ban'})[a]||a;}
@@ -33,13 +34,26 @@ function deterministic(text){
   m=t.match(/^(?:who\s+am\s+i|who\s+is\s+me|what\s+is\s+my\s+(?:name|username|user(?:name)?|id)|who\s+am\s+i\??)$/i);if(m)return {action:'whoami'};
   m=t.match(/^(?:who(?:'s| is)\s+in|list)\s+(.+)$/i);if(m)return {action:'awareness',destination:m[1]};
   m=t.match(/^(?:who\s+(?:made|created|built)\s+(?:you|u)|who\s+are\s+you|what\s+are\s+you|what\s+is\s+your\s+name)\??$/i);if(m)return {action:'jarvis_identity'};
+  m=t.match(/^(?:prohibit|prevent|block|forbid|restrict|deny)\s+(.+?)\s+from\s+(?:using\s+|access(?:ing)?\s+)?(.+?)(?:\s+in\s+(.+))?$/i);
+  if(m && findPermission(m[2])) return {action:'permdeny',targetText:m[1].trim(),permissionText:m[2].trim(),channelText:m[3]?m[3].trim():'',reason:''};
+  m=t.match(/^(?:allow|permit|let)\s+(.+?)\s+to\s+(.+?)(?:\s+in\s+(.+))?$/i);
+  if(m && findPermission(m[2])) return {action:'permgrant',targetText:m[1].trim(),permissionText:m[2].trim(),channelText:m[3]?m[3].trim():'',reason:''};
+  m=t.match(/^(?:grant|give)\s+(.+?)\s+(.+?)(?:\s+permission)?(?:\s+in\s+(.+))?$/i);
+  if(m && findPermission(m[2])) return {action:'permgrant',targetText:m[1].trim(),permissionText:m[2].trim(),channelText:m[3]?m[3].trim():'',reason:''};
   return null;
 }
 
 async function getIntent(message,text){
   const deterministicIntent=deterministic(text); if(deterministicIntent)return deterministicIntent;
   if(!ACTION_WORDS.test(text))return null;
-  try { const parsed=await parseCommandIntent({message,prompt:text}); if(!parsed)return null; parsed.action=normalizeAction(parsed.action); return parsed; } catch { return null; }
+  try {
+    const parsed=await parseCommandIntent({message,prompt:text}); if(!parsed)return null; parsed.action=normalizeAction(parsed.action);
+    if(parsed.action==='permgrant'||parsed.action==='permdeny'){
+      if(!parsed.targets?.[0]||!parsed.permission)return null;
+      return {action:parsed.action,targetText:parsed.targets[0],permissionText:parsed.permission,channelText:parsed.destination||'',reason:parsed.reason||''};
+    }
+    return parsed;
+  } catch { return null; }
 }
 
 async function resolveTargets(message, refs){
@@ -76,9 +90,11 @@ async function route({message,text,config,saveConfig}){
     const picked=pickFromCandidates(text,c.candidates);
     if(picked){
       context.clear(message);
-      const nextIntent=c.kind==='channel'
-        ? {...c.intent,destination:picked.name}
-        : {...c.intent,targets:[picked.id],destination:c.intent.destination};
+      let nextIntent;
+      if(c.kind==='channel')nextIntent={...c.intent,destination:picked.name};
+      else if(c.kind==='role')nextIntent={...c.intent,targetText:`<@&${picked.id}>`};
+      else if(c.intent.action==='permgrant'||c.intent.action==='permdeny')nextIntent={...c.intent,targetText:`<@${picked.id}>`};
+      else nextIntent={...c.intent,targets:[picked.id],destination:c.intent.destination};
       return perform({message,intent:nextIntent,config,saveConfig,confirmed:true});
     }
   }
@@ -97,8 +113,32 @@ async function perform({message,intent,config,saveConfig,confirmed=false}){
   }
   if(intent.action==='diagnostics'){const snap=await awareness.snapshot(message.guild);return {handled:true,text:`**JARVIS V9 DIAGNOSTICS**\n🟢 Discord ONLINE\n🟢 Command Engine ONLINE\n🟢 Resolver ONLINE\n🟢 Executor ONLINE\n🟢 Journal ONLINE\n🟢 Context ONLINE\n🟢 Tool Registry ONLINE (${toolRegistry.list().length} core tools)\n\n${awareness.format(snap)}`};}
   if(intent.action==='awareness'){const r=resolveChannel(message.guild,intent.destination,{voiceOnly:true});if(r.status==='ambiguous')return {handled:true,text:`I found multiple voice channels matching **${intent.destination}**:\n${r.candidates.map((c,i)=>`**${i+1}.** 🔊 ${c.name}`).join('\n')}`};if(!r.channel)return {handled:true,text:`I couldn't find voice channel **${intent.destination}**.`};return {handled:true,text:`${r.channel.name} currently has **${r.channel.members.filter(m=>!m.user.bot).size}** members.\n${r.channel.members.filter(m=>!m.user.bot).map(m=>`• ${m.displayName}`).join('\n')||'Nobody, apparently.'}`};}
-  if(intent.action==='history'){let ref=intent.targets?.[0];if(ref&&!/^\d{15,25}$/.test(ref)){const r=await resolveMember(message.guild,ref);if(r.status==='resolved')ref=r.member.id;}const entries=ref?(config.v9?.actionJournal||[]).filter(x=>x.targetId===ref).slice(-10).reverse():(config.v9?.actionJournal||[]).slice(-10).reverse();return {handled:true,text:`**JARVIS V9 ACTION HISTORY**\n${entries.map(x=>`#${x.id} • ${x.action} • <@${x.targetId||message.author.id}> • ${x.status} • ${new Date(x.at).toLocaleString()}`).join('\n')||'No actions logged yet.'}`};}
-  if(intent.action==='caseinfo'){const entry=journal.get(config,intent.caseId);if(!entry)return {handled:true,text:`No case **#${intent.caseId}** exists, sir.`};return {handled:true,text:`**JARVIS V9 CASE #${entry.id}**\nAction: **${entry.action}**\nActor: <@${entry.actorId}>\nTarget: ${entry.targetId?`<@${entry.targetId}>`:'none'}\nDestination: ${entry.destinationId?`<#${entry.destinationId}>`:'none'}\nStatus: **${entry.status}**\nReversible: **${entry.reversible?'yes':'no'}**\nReason: ${entry.reason||'none'}\nAt: ${new Date(entry.at).toLocaleString()}\nBefore: \`${JSON.stringify(entry.before||{})}\`\nAfter: \`${JSON.stringify(entry.after||{})}\``};}
+  if(intent.action==='history'){let ref=intent.targets?.[0];if(ref&&!/^\d{15,25}$/.test(ref)){const r=await resolveMember(message.guild,ref);if(r.status==='resolved')ref=r.member.id;}const entries=ref?(config.v9?.actionJournal||[]).filter(x=>x.targetId===ref).slice(-10).reverse():(config.v9?.actionJournal||[]).slice(-10).reverse();return {handled:true,text:`**JARVIS V9 ACTION HISTORY**\n${entries.map(x=>`#${x.id} • ${x.action} • ${x.targetKind==='role'?`<@&${x.targetId}>`:`<@${x.targetId||message.author.id}>`} • ${x.status} • ${new Date(x.at).toLocaleString()}`).join('\n')||'No actions logged yet.'}`};}
+  if(intent.action==='caseinfo'){const entry=journal.get(config,intent.caseId);if(!entry)return {handled:true,text:`No case **#${intent.caseId}** exists, sir.`};return {handled:true,text:`**JARVIS V9 CASE #${entry.id}**\nAction: **${entry.action}**\nActor: <@${entry.actorId}>\nTarget: ${entry.targetId?(entry.targetKind==='role'?`<@&${entry.targetId}>`:`<@${entry.targetId}>`):'none'}\nDestination: ${entry.destinationId?`<#${entry.destinationId}>`:'none'}\nStatus: **${entry.status}**\nReversible: **${entry.reversible?'yes':'no'}**\nReason: ${entry.reason||'none'}\nAt: ${new Date(entry.at).toLocaleString()}\nBefore: \`${JSON.stringify(entry.before||{})}\`\nAfter: \`${JSON.stringify(entry.after||{})}\``};}
+  if(intent.action==='permgrant'||intent.action==='permdeny'){
+    const permission=findPermission(intent.permissionText);
+    if(!permission)return {handled:true,text:`I couldn't identify a permission matching **${intent.permissionText}**, sir.`};
+    const entityResult=await resolveTargetEntity(message.guild,intent.targetText);
+    if(entityResult.status==='ambiguous'){
+      context.set(message,{intent,candidates:entityResult.candidates,destination:intent.targetText,kind:entityResult.kind});
+      return {handled:true,text:`I found multiple ${entityResult.kind}s matching **${intent.targetText}**:\n${entityResult.candidates.map((c,i)=>`**${i+1}.** ${entityResult.kind==='role'?'🎭':'👤'} ${c.name||c.user?.tag}`).join('\n')}`};
+    }
+    if(entityResult.status!=='resolved')return {handled:true,text:`I couldn't find a member or role matching **${intent.targetText}**, sir.`};
+    let channel=null;
+    if(intent.channelText){
+      const r=resolveChannel(message.guild,intent.channelText,{});
+      if(r.status==='ambiguous')return {handled:true,text:`I found multiple channels matching **${intent.channelText}**.`};
+      if(!r.channel)return {handled:true,text:`I couldn't find a channel matching **${intent.channelText}**.`};
+      channel=r.channel;
+    }
+    if(!confirmed){
+      const scopeText=channel?`in **${channel.name}**`:permission.scope==='guild'?'server-wide':'across matching channels';
+      confirmations.create(message,{intent});
+      return {handled:true,text:`This will **${intent.action==='permgrant'?'GRANT':'DENY'}** **${permission.name}** for **${entityResult.entity.name||entityResult.entity.user?.tag}** ${scopeText}. Reply **yes** to proceed or **no** to cancel.`};
+    }
+    const result=await executePermissionChange({message,action:intent.action,entityKind:entityResult.kind,targetEntity:entityResult.entity,permission,channel,reason:intent.reason,config,saveConfig});
+    return {handled:true,text:result.text};
+  }
   if(intent.action==='undo'){const entry=intent.caseId?journal.get(config,intent.caseId):journal.latest(config,x=>x.reversible);if(!entry)return {handled:true,text:'I found no reversible action to undo.'};const result=await undo({message,entry,config,saveConfig});return {handled:true,text:result.text};}
   if(intent.action==='trace'){const inner=deterministic(intent.raw)||await getIntent(message,intent.raw);if(!inner)return {handled:true,text:'**V9 TRACE**\nCould not build a structured intent from that input.'};return {handled:true,text:`**JARVIS V9 TRACE**\nINPUT → \`${intent.raw}\`\nACTION → **${normalizeAction(inner.action)}**\nTARGETS → **${(inner.targets||[]).join(', ')||'none'}**\nSOURCE → **${inner.source||'none'}**\nDESTINATION → **${inner.destination||'none'}**\nREASON → **${inner.reason||'none'}**\nMODE → **parse-only, no changes made**`};}
   if(intent.action==='simulate'){const inner=deterministic(intent.raw)||await getIntent(message,intent.raw);if(!inner)return {handled:true,text:'I could not build a simulation plan from that command.'};const targetResult=await resolveTargets(message,inner.targets);if(targetResult.error)return {handled:true,text:targetResult.error};let destination=null;if(inner.destination){const r=resolveChannel(message.guild,inner.destination,{voiceOnly:true});if(r.status==='ambiguous'){return {handled:true,text:`Simulation needs a unique destination.\n${r.candidates.map((c,i)=>`${i+1}. ${c.name}`).join('\n')}`};}destination=r.channel;if(!destination)return {handled:true,text:`Simulation could not resolve **${inner.destination}**.`};}const checks=[];for(const m of targetResult.members){const r=await execute({message,action:normalizeAction(inner.action),target:m,destination,reason:inner.reason,durationMs:inner.durationMs,config,saveConfig,dryRun:true,skipJournal:true});checks.push({action:inner.action,target:m,destination,allowed:r.ok,reason:r.ok?'allowed':r.text});}const plan=simulator.plan(checks);return {handled:true,text:`**JARVIS V9 SIMULATION**\n${plan.map(x=>`${x.step}. ${x.action.toUpperCase()} → ${x.target}${x.destination?` → ${x.destination}`:''} ${x.allowed?'✓':'✗'}${x.reason&&!x.allowed?` — ${x.reason}`:''}`).join('\n')}\n\n**No changes were made.**`};}

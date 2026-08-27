@@ -86,8 +86,62 @@ function resolveChannel(guild, query, {voiceOnly=false}={}) {
   return {status:'resolved',channel:matches[0].channel,candidates:matches.slice(0,10).map(x=>x.channel)};
 }
 
+function scoreRole(role, q) {
+  const query = normalize(q);
+  const name = role.name.toLowerCase();
+  if (name === query) return 1000;
+  if (name.startsWith(query)) return 850;
+  if (name.includes(query)) return 700;
+  return -1;
+}
+
+function resolveRole(guild, query) {
+  const raw = String(query || '').trim();
+  const mention = raw.match(/^<@&(\d+)>$/);
+  if (mention) {
+    const role = guild.roles.cache.get(mention[1]);
+    return role ? {status:'resolved',role,candidates:[role]} : {status:'missing',role:null,candidates:[]};
+  }
+  const roles = [...guild.roles.cache.values()].filter(r=>r.id!==guild.id);
+  const matches = roles.map(r=>({role:r,score:scoreRole(r,raw)})).filter(x=>x.score>=0).sort((a,b)=>b.score-a.score || a.role.id.localeCompare(b.role.id));
+  if (!matches.length) return {status:'missing',role:null,candidates:[]};
+  if (matches.length>1 && matches[0].score===matches[1].score) return {status:'ambiguous',role:null,candidates:matches.slice(0,10).map(x=>x.role)};
+  return {status:'resolved',role:matches[0].role,candidates:matches.slice(0,10).map(x=>x.role)};
+}
+
+// Resolves a phrase to either a role or a member, since permission commands can target either
+// ("prohibit @role from ...", "prohibit @user from ..."). Role mentions/trailing "role" word and
+// exact role-name matches take priority; otherwise falls back to member resolution.
+async function resolveTargetEntity(guild, query) {
+  const raw = String(query || '').trim();
+  const roleMention = raw.match(/<@&(\d+)>/);
+  if (roleMention) {
+    const role = guild.roles.cache.get(roleMention[1]);
+    if (role) return {status:'resolved',kind:'role',entity:role};
+  }
+  const userMention = raw.match(/^<@!?(\d+)>$/);
+  if (userMention) {
+    const member = guild.members.cache.get(userMention[1]) || await guild.members.fetch(userMention[1]).catch(()=>null);
+    if (member) return {status:'resolved',kind:'member',entity:member};
+  }
+  const explicitRole = /\brole$/i.test(raw);
+  const roleQuery = explicitRole ? raw.replace(/\s+role$/i,'').trim() : raw;
+  if (explicitRole) {
+    const r = resolveRole(guild, roleQuery);
+    if (r.status==='resolved') return {status:'resolved',kind:'role',entity:r.role};
+    if (r.status==='ambiguous') return {status:'ambiguous',kind:'role',candidates:r.candidates};
+  }
+  const roleResult = resolveRole(guild, raw);
+  if (roleResult.status==='resolved') return {status:'resolved',kind:'role',entity:roleResult.role};
+  const memberResult = await resolveMember(guild, raw);
+  if (memberResult.status==='resolved') return {status:'resolved',kind:'member',entity:memberResult.member};
+  if (memberResult.status==='ambiguous') return {status:'ambiguous',kind:'member',candidates:memberResult.candidates};
+  if (roleResult.status==='ambiguous') return {status:'ambiguous',kind:'role',candidates:roleResult.candidates};
+  return {status:'missing'};
+}
+
 function splitTargets(text='') {
   return String(text).replace(/\s+(?:and|n|&)\s+/gi, ',').split(',').map(x=>x.trim()).filter(Boolean);
 }
 
-module.exports={ensureMembers,resolveMember,resolveChannel,splitTargets};
+module.exports={ensureMembers,resolveMember,resolveChannel,resolveRole,resolveTargetEntity,splitTargets};
