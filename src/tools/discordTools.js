@@ -6,12 +6,23 @@ async function fetchAllMembers(guild) {
 }
 
 function findMembers(guild, query) {
-  const q = String(query || '').toLowerCase().replace(/^[@#]/, '');
+  const q = String(query || '').trim().toLowerCase().replace(/^[@#]/, '');
+  if (!q) return guild.members.cache;
+  // Prefer exact identity matches. The previous `first()` over substring
+  // matches could select an unrelated member when several names matched.
+  const exact = guild.members.cache.filter(m =>
+    m.id === q ||
+    m.user.username.toLowerCase() === q ||
+    (m.user.globalName || '').toLowerCase() === q ||
+    m.displayName.toLowerCase() === q ||
+    m.user.tag.toLowerCase() === q
+  );
+  if (exact.size) return exact;
   return guild.members.cache.filter(m =>
     m.user.username.toLowerCase().includes(q) ||
     (m.user.globalName || '').toLowerCase().includes(q) ||
     m.displayName.toLowerCase().includes(q) ||
-    m.user.tag.toLowerCase().includes(q) || m.id === query
+    m.user.tag.toLowerCase().includes(q) || m.id === q
   );
 }
 

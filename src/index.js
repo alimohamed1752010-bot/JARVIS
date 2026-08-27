@@ -652,9 +652,10 @@ function memberFromMention(message) {
 
 function dangerousActionFromText(text) {
   const t = String(text || '').toLowerCase();
+  if (/\b(?:untimeout|un-timeout|untime|un\s+time\s*out|unmute|remove\s+(?:the\s+)?(?:timeout|mute)|take\s+(?:the\s+)?(?:timeout|mute)\s+off|clear\s+(?:the\s+)?(?:timeout|mute))\b/.test(t) || /\b(?:timeout|time\s*out|mute)\s+.+?\s+out\b/.test(t)) return 'untimeout';
   if (/\b(perma(?:nent)?\s+)?ban\b/.test(t)) return 'ban';
   if (/\bkick\b/.test(t)) return 'kick';
-  if (/\btimeout|time out|mute\b/.test(t)) return 'timeout';
+  if (/\btimeout|time\s+out|mute\b/.test(t)) return 'timeout';
   if (/\bwarn|warning\b/.test(t)) return 'warn';
   return null;
 }
@@ -675,7 +676,7 @@ async function confirmModerationAction(message, action, target, reason) {
     await message.reply('I shall decline to moderate myself, sir.');
     return true;
   }
-  const canAct = action === 'ban' ? member.bannable : action === 'kick' ? member.kickable : action === 'timeout' ? member.moderatable : true;
+  const canAct = action === 'ban' ? member.bannable : action === 'kick' ? member.kickable : action === 'timeout' || action === 'untimeout' ? member.moderatable : true;
   if (!canAct) { await message.reply('I cannot safely perform that action against the selected member due to Discord role hierarchy or permissions.'); return true; }
   const label = action === 'timeout' ? '10 minute timeout' : action;
   const row = new ActionRowBuilder().addComponents(
@@ -736,7 +737,7 @@ async function executeModerationAction(message, action, member, reason, duration
   if (member.id === ownerId()) return { ok:false, text:'Absolutely not. I do not take disciplinary action against my master.' };
   if (member.id === message.guild.ownerId && member.id !== message.author.id) return { ok:false, text:'I cannot moderate the server owner. Discord hierarchy will not permit it.' };
   if (member.id === me.id) return { ok:false, text:'I shall decline to moderate myself, sir.' };
-  const canAct = action === 'ban' ? member.bannable : action === 'kick' ? member.kickable : action === 'timeout' ? member.moderatable : true;
+  const canAct = action === 'ban' ? member.bannable : action === 'kick' ? member.kickable : (action === 'timeout' || action === 'untimeout') ? member.moderatable : true;
   if (!canAct) return { ok:false, text:'I cannot safely perform that action because of Discord role hierarchy or missing permissions.' };
   try {
     let label = action.toUpperCase();
@@ -746,6 +747,10 @@ async function executeModerationAction(message, action, member, reason, duration
       const safeDuration = Math.min(Math.max(Number(durationMs) || 10 * 60 * 1000, 1000), 28 * 24 * 60 * 60 * 1000);
       await member.timeout(safeDuration, `JARVIS: ${reason || 'Owner-directed moderation'}`);
       label = `${Math.round(safeDuration / 60000)} MINUTE TIMEOUT`;
+    } else if (action === 'untimeout') {
+      if (!member.communicationDisabledUntilTimestamp) return { ok:true, text:`**${member.user.tag}** is not currently timed out, sir.` };
+      await member.timeout(null, `JARVIS: ${reason || 'Owner-directed timeout removal'}`);
+      label = 'TIMEOUT REMOVED';
     } else addWarning(message.guild.id, member.id, reason || 'Owner-directed moderation', message.author.tag);
     const c = addCase(message.guild.id, { action: action.toUpperCase(), userId: member.id, moderatorId: message.author.id, reason: reason || 'Owner-directed moderation', evidence: { channelId: message.channel.id, messageId: message.id, source: 'natural-language-owner-command' } });
     await logEvent(message.guild, `🛡️ JARVIS executed **${label}** on **${member.user.tag}** — Case #${c.id}`);
@@ -756,43 +761,114 @@ async function executeModerationAction(message, action, member, reason, duration
   }
 }
 
+async function resolveNaturalMember(message, candidate) {
+  if (!candidate) return null;
+  let cleaned = String(candidate).trim()
+    .replace(/<@!?(\d+)>/g, '$1')
+    .replace(/^@/, '')
+    .replace(/[,.!?]+$/, '')
+    .trim()
+    .replace(/\s+out$/i, '')
+    .trim();
+  if (!cleaned) return null;
+  if (/^\d{15,25}$/.test(cleaned)) return message.guild.members.cache.get(cleaned) || await message.guild.members.fetch(cleaned).catch(() => null);
+  const mentioned = message.mentions.members.first();
+  if (mentioned && /^<@!?(?:\d+)>$/.test(String(candidate))) return mentioned;
+
+  await discordTools.fetchAllMembers(message.guild);
+  const q = cleaned.toLowerCase().replace(/\s+/g, ' ').trim();
+  let pool = [...message.guild.members.cache.values()];
+  try {
+    const queried = await message.guild.members.fetch({ query: cleaned, limit: 10 });
+    for (const m of queried.values()) if (!pool.some(x => x.id === m.id)) pool.push(m);
+  } catch {}
+  const scored = [];
+  for (const m of pool) {
+    for (const raw of [m.user.username, m.user.globalName, m.displayName, m.user.tag]) {
+      const v = String(raw || '').toLowerCase().replace(/\s+/g, ' ').trim();
+      if (!v) continue;
+      let score = -1;
+      if (v === q) score = 130;
+      else if (v.startsWith(q)) score = 115;
+      else if (v.split(/\s+/).some(part => part === q)) score = 110;
+      else if (v.includes(q)) score = 90;
+      if (score >= 0) scored.push({ member:m, score });
+    }
+  }
+  scored.sort((a,b)=>b.score-a.score);
+  if (!scored.length) return null;
+  const best = scored[0];
+  const tie = scored.find(x => x.member.id !== best.member.id && x.score === best.score);
+  return tie ? null : best.member;
+}
+
+function parseNaturalDuration(text, fallback = 10 * 60 * 1000) {
+  const m = String(text || '').match(/\b(?:for\s+)?(\d+)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\b/i);
+  if (!m) return fallback;
+  const n = Number(m[1]);
+  const unit = m[2].toLowerCase();
+  const mult = /^s/.test(unit) ? 1000 : /^m/.test(unit) ? 60000 : /^h/.test(unit) ? 3600000 : 86400000;
+  return Math.min(Math.max(n * mult, 1000), 28 * 24 * 60 * 60 * 1000);
+}
+
+function isUndoTimeoutRequest(text) {
+  const t = String(text || '');
+  return /\b(?:untimeout|un-timeout|untime|un\s+time\s*out|remove\s+(?:the\s+)?(?:timeout|mute)|unmute|take\s+(?:the\s+)?(?:mute|timeout)\s+off|clear\s+(?:the\s+)?(?:mute|timeout))\b/i.test(t) || /\b(?:untime|un\s+time\s*out)\s+.+?\s+out\b/i.test(t);
+}
+
 async function understandOwnerModeration(message, text) {
   const lower = String(text || '').toLowerCase();
   let target = memberFromMention(message);
   let action = dangerousActionFromText(text);
-  let durationMs = 10 * 60 * 1000;
+  if (isUndoTimeoutRequest(text)) action = 'untimeout';
+  let durationMs = parseNaturalDuration(text);
 
-  // Natural-language member resolution. Mentions are preferred; otherwise search
-  // the member name immediately before a situation phrase such as "is spamming".
+  // Explicit natural-language target forms: "timeout Steve", "insult Steve",
+  // "Steve is spamming, handle it", "untimeout Steve", etc.
   if (!target) {
     const candidates = [
-      text.match(/(?:handle|deal with|take care of|do something about)\s+(.+?)(?:\s+(?:is|has been|keeps|was)\s+|$)/i)?.[1],
+      text.match(/^(?:timeout|time\s*out|mute|warn|warning|kick|ban|untimeout|un-timeout|untime|un\s+time\s*out|unmute)\s+(.+?)(?:\s+(?:for|because|reason)\b|$)/i)?.[1],
+      text.match(/^(?:insult|roast|flame|cook|clown|make\s+fun\s+of)\s+(.+?)$/i)?.[1],
+      text.match(/^(?:handle|deal with|take care of|do something about)\s+(.+?)(?:\s+(?:is|has been|keeps|was)\s+|$)/i)?.[1],
       text.match(/^(.+?)\s+(?:is|has been|keeps|kept|was)\s+(?:spamming|flooding|spam|annoying|harassing|advertising|scamming|trolling)\b/i)?.[1],
-      text.match(/^(?:hey\s+)?(.+?)\s+(?:is|has been|keeps)\s+/i)?.[1]
+      text.match(/^(.+?)\s+(?:is|has been|keeps)\s+/i)?.[1]
     ].filter(Boolean);
     for (const candidate of candidates) {
-      target = await discordTools.getMember(message.guild, String(candidate).trim().replace(/[,.!?]+$/, ''));
+      target = await resolveNaturalMember(message, candidate);
       if (target) break;
     }
   }
   if (!target) return false;
 
-  // Explicit actions always win. Otherwise infer a conservative action from the
-  // reported behavior; "handle" never silently escalates to kick/ban.
+  // This function is moderation only. Roast requests are handled separately,
+  // but we intentionally resolve the target here so "jarvis insult Steve"
+  // can use the same natural member resolver.
+  if (action === 'untimeout') {
+    if (target.id === ownerId()) { await message.reply('Absolutely not. I do not alter disciplinary status for my master.'); return true; }
+    if (target.id === message.guild.ownerId) { await message.reply('I cannot alter the server owner\'s timeout status, sir.'); return true; }
+    if (target.id === message.guild.members.me?.id) { await message.reply('I shall decline to alter my own moderation status, sir.'); return true; }
+    if (!target.moderatable) { await message.reply('I cannot remove that timeout because of Discord role hierarchy or permissions.'); return true; }
+    try {
+      await target.timeout(null, 'JARVIS: Owner-directed timeout removal');
+      const c = addCase(message.guild.id, { action: 'UNTIMEOUT', userId: target.id, moderatorId: message.author.id, reason: 'Owner-directed timeout removal', evidence: { channelId: message.channel.id, messageId: message.id, source: 'natural-language-owner-command' } });
+      await logEvent(message.guild, `🛡️ JARVIS removed timeout from **${target.user.tag}** — Case #${c.id}`);
+      await message.reply(`Done, sir. I removed **${target.user.tag}**'s timeout. Case #${c.id}.`);
+    } catch (e) { console.error('[JARVIS UNTIMEOUT ERROR]', e); await message.reply(`I understood the instruction, sir, but Discord rejected it: ${String(e.message || e).slice(0,280)}`); }
+    return true;
+  }
+
+  // If this is a roast request, let the owner-roast handler perform the roast.
+  if (isInsultRequest(text) && !action) return false;
+
   if (!action) {
     if (/\b(spam|spamming|flood|flooding|advertis|raid|message\s+spam)\b/i.test(lower)) action = 'timeout';
     else if (/\b(harass|harassing|harassment|threaten|threatening)\b/i.test(lower)) action = 'timeout';
     else if (/\b(scam|scamming|phish|phishing)\b/i.test(lower)) action = 'timeout';
-    else if (/\b(warn|warning)\b/i.test(lower)) action = 'warn';
+    else if (/\b(kick|remove)\b/i.test(lower)) action = 'kick';
+    else if (/\b(ban)\b/i.test(lower)) action = 'ban';
   }
   if (!action) return false;
 
-  const dm = text.match(/\b(\d+)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\b/i);
-  if (dm) {
-    const n = Number(dm[1]); const unit = dm[2].toLowerCase();
-    const mult = /^s/.test(unit) ? 1000 : /^m/.test(unit) ? 60000 : /^h/.test(unit) ? 3600000 : 86400000;
-    durationMs = n * mult;
-  }
   const reasonMatch = text.match(/\b(?:because|reason|for)\b[: ]+(.+)$/i);
   const reason = reasonMatch?.[1]?.trim() ||
     (/\bspam|spamming|flooding\b/i.test(lower) ? 'Spam/flooding reported by the master.' :
@@ -813,7 +889,11 @@ async function handleOwnerToolRequest(message, input) {
   if (await understandOwnerModeration(message, text)) return true;
 
   const action = dangerousActionFromText(text);
-  const target = memberFromMention(message);
+  let target = memberFromMention(message);
+  if (!target && action) {
+    const candidate = text.match(/^(?:ban|kick|timeout|time\s*out|mute|warn|warning)\s+(.+?)(?:\s+(?:for|because|reason)\b|$)/i)?.[1];
+    if (candidate) target = await resolveNaturalMember(message, candidate);
+  }
   if (action && target) {
     const reasonMatch = text.match(/\b(?:because|reason)\b[: ]+(.+)$/i);
     return confirmModerationAction(message, action, target, reasonMatch?.[1] || text.replace(/<@!?\d+>/g, '').replace(/\b(ban|kick|timeout|time out|mute|warn|warning)\b/i, '').trim()) || true;
@@ -1051,28 +1131,14 @@ registerCommand(
       );
     }
 
-    const member =
-      message.mentions.members.first();
+    let member = message.mentions.members.first();
 
-    const durationArg =
-      args.find(arg =>
-        /^\d+(s|m|h|d)$/i.test(arg)
-      );
+    const durationArg = args.find(arg => /^\d+(s|m|h|d)$/i.test(arg));
+    if (!member) member = await resolveNaturalMember(message, args.filter(a => a !== durationArg).join(' '));
+    if (!member) return message.reply("❌ I couldn't identify that member, sir. Use their name or mention.");
 
-    if (!member) {
-      return message.reply(
-        "❌ Mention the member."
-      );
-    }
-
-    if (!durationArg) {
-      return message.reply(
-        "❌ Give me a duration, e.g. `10m`."
-      );
-    }
-
-    const duration =
-      parseDuration(durationArg);
+    const duration = parseDuration(durationArg || "10m");
+    const effectiveDurationArg = durationArg || "10m";
 
     if (
       duration >
@@ -1089,11 +1155,10 @@ registerCommand(
       );
     }
 
-    const index =
-      args.indexOf(durationArg);
+    const index = durationArg ? args.indexOf(durationArg) : args.length;
 
     const reason =
-      args.slice(index + 1).join(" ") ||
+      (durationArg ? args.slice(index + 1) : []).join(" ") ||
       "No reason provided";
 
     try {
@@ -1105,7 +1170,7 @@ registerCommand(
       await logEvent(message.guild, `⏱️ **${member.user.tag}** was timed out by **${message.author.tag}** — Case #${c.id} — ${reason}`);
 
       await message.reply(
-        `⏱️ **${member.user.tag}** has been timed out for **${durationArg}**.\nReason: ${reason}\nCase: **#${c.id}**`
+        `⏱️ **${member.user.tag}** has been timed out for **${effectiveDurationArg}**.\nReason: ${reason}\nCase: **#${c.id}**`
       );
     } catch (error) {
       console.error(error);
@@ -4007,7 +4072,14 @@ client.on(
       // ======================================================
 
       if (isInsultRequest(input)) {
-        const target = message.mentions.users.first();
+        let target = message.mentions.users.first();
+        if (!target && isOwner(message)) {
+          const candidate = input.match(/^(?:insult|roast|flame|cook|clown|make\s+fun\s+of)\s+(.+?)$/i)?.[1];
+          if (candidate) {
+            const resolved = await resolveNaturalMember(message, candidate);
+            if (resolved) target = resolved.user;
+          }
+        }
 
         if (target && target.id === getOwnerId()) {
           await message.reply(
