@@ -1,7 +1,7 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "8.3.3",
-  "description": "JARVIS V8.3.3 with fixed voice-channel shorthand and interactive move clarification.",
+  "version": "8.3.5",
+  "description": "JARVIS V8.3.5 with robust voice-channel clarification and selection handling.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

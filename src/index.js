@@ -1105,7 +1105,8 @@ async function understandOwnerModeration(message, text) {
 }
 
 async function handlePendingVoiceMove(message, input) {
-  if (!message.guild || !isOwner(message)) return false;
+  if (!message.guild) return false;
+
   const key = `${message.guild.id}:${message.author.id}`;
   const pending = pendingVoiceMoves.get(key);
   if (!pending) return false;
@@ -1115,32 +1116,61 @@ async function handlePendingVoiceMove(message, input) {
     return false;
   }
 
-  const rawInput = String(input || '');
-  const query = normalizeVoiceChannelQuery(rawInput);
-  if (!query) return false;
+  // Accept both a bare reply ("general 1") and a natural JARVIS-style
+  // reply ("jarvis general 1"). The clarification is tied to this exact
+  // user + guild, so it remains owner-only without relying on the current
+  // owner environment check a second time.
+  let rawInput = String(input || '').trim();
+  rawInput = rawInput.replace(/^jarvis\b[,:!\s-]*/i, '').trim();
+  if (!rawInput) return false;
 
   const candidates = pending.channelIds
     .map(id => message.guild.channels.cache.get(id))
-    .filter(Boolean);
+    .filter(c => c && c.isVoiceBased());
+
   if (!candidates.length) {
     pendingVoiceMoves.delete(key);
     await message.reply('Those voice-channel options are no longer available, sir.');
     return true;
   }
 
+  const query = normalizeVoiceChannelQuery(rawInput);
   const comparableQuery = comparableVoiceChannelName(query);
-  const exact = candidates.filter(c => comparableVoiceChannelName(c.name) === comparableQuery);
-  const partial = candidates.filter(c => comparableVoiceChannelName(c.name).includes(comparableQuery));
-  const matches = exact.length ? exact : partial;
 
-  // If this message clearly is not an answer to the clarification, do not
-  // consume it. This prevents messages like "bruh" from being hijacked by
-  // the pending move state.
-  if (!matches.length) return false;
+  // Also accept the numbered option JARVIS displayed, e.g. "1".
+  let matches = [];
+  const numericChoice = query.match(/^(?:option\s*)?(\d+)$/i);
+  if (numericChoice) {
+    const index = Number(numericChoice[1]) - 1;
+    if (index >= 0 && index < candidates.length) matches = [candidates[index]];
+  }
+
+  if (!matches.length) {
+    const exact = candidates.filter(c =>
+      comparableVoiceChannelName(c.name) === comparableQuery
+    );
+    if (exact.length) {
+      matches = exact;
+    } else {
+      // Match shorthand such as "gen 1" -> "general 1", plus harmless
+      // punctuation/spacing differences. Only pending candidates are used.
+      matches = candidates.filter(c => {
+        const name = comparableVoiceChannelName(c.name);
+        return name.includes(comparableQuery) || comparableQuery.includes(name);
+      });
+    }
+  }
+
+  console.log(`[JARVIS VOICE CLARIFICATION] input=${JSON.stringify(rawInput)} query=${JSON.stringify(comparableQuery)} candidates=${candidates.map(c => JSON.stringify(c.name)).join(',')} matches=${matches.map(c => JSON.stringify(c.name)).join(',')}`);
 
   if (matches.length !== 1) {
-    await message.reply(`Please specify one of the listed voice channels, sir.`);
-    return true;
+    if (matches.length > 1) {
+      await message.reply(`Please specify one of the listed voice channels, sir.`);
+      return true;
+    }
+    // This was not an answer to the clarification. Do not consume it, and
+    // definitely do not turn it into a moderation request.
+    return false;
   }
 
   const member = message.guild.members.cache.get(pending.memberId) ||
@@ -1151,12 +1181,23 @@ async function handlePendingVoiceMove(message, input) {
     return true;
   }
 
+  const destination = matches[0];
   pendingVoiceMoves.delete(key);
-  const result = await executeModerationAction(message, 'voicemove', member, 'Owner-directed voice move', 10 * 60 * 1000, { destinationOverride: `<#${matches[0].id}>` });
+
+  // Execute directly with the already-selected channel ID. This prevents
+  // the original natural-language parser from reinterpreting the reply and
+  // asking for a destination all over again.
+  const result = await executeModerationAction(
+    message,
+    'voicemove',
+    member,
+    'Owner-directed voice move',
+    10 * 60 * 1000,
+    { destinationOverride: `<#${destination.id}>` }
+  );
   await message.reply(result.text);
   return true;
 }
-
 async function handleOwnerToolRequest(message, input) {
   const text = String(input || '').trim();
   if (!text) return false;
