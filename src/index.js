@@ -25,6 +25,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.GuildMessages,
     ...(String(process.env.PRESENCE_INTENT || 'false').toLowerCase() === 'true' ? [GatewayIntentBits.GuildPresences] : []),
     GatewayIntentBits.MessageContent
@@ -326,7 +327,8 @@ registerCommand("personality", "System", async (message,args) => {
 registerCommand("voice", "System", async (message,args) => {
   if (!await requireAdmin(message)) return;
   const sub=(args[0]||'join').toLowerCase();
-  const vc=message.member?.voice?.channel;
+  const member = message.guild.members.cache.get(message.author.id) || message.member;
+  const vc = member?.voice?.channel || message.guild.voiceStates.cache.get(message.author.id)?.channel;
   if(sub==='leave'){ const existing=message.guild.__jarvisVoiceConnection; existing?.destroy(); delete message.guild.__jarvisVoiceConnection; return message.reply('🔊 Leaving the voice channel, sir.'); }
   if(!vc) return message.reply('🔊 Join a voice channel first, sir.');
   if(!voice.status().available) return message.reply('🔊 Voice is not installed in this build. Set the V8 voice dependencies and redeploy.');
