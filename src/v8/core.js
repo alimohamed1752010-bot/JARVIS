@@ -90,7 +90,7 @@ function releaseRequestLock(key) { requestLocks.delete(key); }
 function healthSnapshot({ client, getAIStatus, guildCount = 0 }) {
   const ai = getAIStatus();
   return {
-    version: '8.0.5',
+    version: '8.0.6',
     uptime: process.uptime(),
     memoryMB: Math.round(process.memoryUsage().rss / 1024 / 1024),
     node: process.version,
