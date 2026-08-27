@@ -55,14 +55,15 @@ const { ensureV8, getSession, clearSession, usageSnapshot, healthSnapshot } = re
 const voice = require("./v8/voice");
 const { addFact, getFacts, clearFacts } = require("./ai/memory");
 const discordTools = require("./tools/discordTools");
-const { recordMessage, getTopUsers, getAnalytics } = require("./systems/analytics");
+const { recordMessage, getTopUsers, getAnalytics, getRecentRate, isSpiking } = require("./systems/analytics");
 const { inspectAudit } = require("./systems/security");
-const { startScheduler } = require("./systems/scheduler");
+const { startScheduler, startJobScheduler } = require("./systems/scheduler");
 const { startDashboard } = require("./dashboard");
 const { buildDynamicDefinitions, executeDynamic } = require("./slashBridge");
 const { safeMath } = require("./v8/tools");
 const { route: routeV9Command } = require("./core/commandEngine");
 const { start: startV9Awareness } = require("./systems/eventAwareness");
+const { setServer, setUser, setPreference, getAll: getMemoryLayers } = require("./core/memoryLayers");
 
 // ============================================================
 // AI DIAGNOSTICS
@@ -167,7 +168,8 @@ function defaultConfig() {
       eventAwareness: { enabled: true, voiceMoves: false, logVoiceMoves: false, channels: false, roles: false, members: false, moderation: false },
       confirmations: { enabled: true, destructiveActions: ["ban", "kick", "timeout"] },
       simulation: { enabled: true },
-      commandContextTtlMs: 60000
+      commandContextTtlMs: 60000,
+      scheduledJobs: []
     }
   };
 }
@@ -261,7 +263,50 @@ function normalizeConfig(config) {
   config.v9.eventAwareness = { enabled:true, voiceMoves:false, logVoiceMoves:false, channels:false, roles:false, members:false, moderation:false, ...(config.v9.eventAwareness||{}) };
   config.v9.confirmations = { enabled:true, destructiveActions:['ban','kick','timeout'], ...(config.v9.confirmations||{}) };
   config.v9.simulation = { enabled:true, ...(config.v9.simulation||{}) };
+  config.v9.scheduledJobs ??= [];
   return config;
+}
+
+// V11: reminders now persist to config.reminders (the array already existed in
+// config but nothing wrote to it in V10) so a Railway restart or redeploy no
+// longer silently drops anyone's pending reminder. scheduleReminder() is used
+// both right after `jarvis remind` creates one, and again at startup to
+// rehydrate any reminders that were still pending when the process last
+// stopped. The in-memory `reminders` Map still exists for quick lookup of the
+// live timer object, keyed by the reminder's persistent id.
+function scheduleReminder(entry, { isRehydration = false } = {}) {
+  const remaining = Math.max(entry.fireAt - Date.now(), isRehydration ? 2000 : 0);
+  const timer = setTimeout(async () => {
+    reminders.delete(entry.id);
+    try {
+      const channel = await client.channels.fetch(entry.channelId).catch(() => null);
+      if (channel?.isTextBased()) {
+        const prefix = isRehydration ? "⏰ **Reminder (recovered after a restart):**" : "⏰ **Reminder:**";
+        await channel.send(`<@${entry.userId}> ${prefix} ${entry.text}`).catch(() => {});
+      }
+    } finally {
+      const cfg = getConfig(entry.guildId);
+      cfg.reminders = (cfg.reminders || []).filter(r => r.id !== entry.id);
+      saveConfig(entry.guildId, cfg);
+    }
+  }, remaining);
+  reminders.set(entry.id, { user: entry.userId, timer });
+}
+
+function rehydrateReminders() {
+  const dataDir = path.join(__dirname, "..", "data");
+  if (!fs.existsSync(dataDir)) return;
+  const files = fs.readdirSync(dataDir).filter(f => f.endsWith(".json"));
+  let count = 0;
+  for (const file of files) {
+    const guildId = file.replace(/\.json$/, "");
+    const cfg = getConfig(guildId);
+    for (const entry of cfg.reminders || []) {
+      scheduleReminder(entry, { isRehydration: true });
+      count++;
+    }
+  }
+  if (count > 0) console.log(`[REMINDERS] Rehydrated ${count} pending reminder(s) after restart.`);
 }
 
 // ============================================================
@@ -461,6 +506,97 @@ registerCommand("forget", "System", async (message,args) => {
   else { clearFacts(cfg,message.guild.id,target.id); }
   saveConfig(message.guild.id,cfg); return message.reply(`🧹 Long-term memory cleared for **${getDisplayName(target)}**, sir.`);
 }, "Clear persistent JARVIS memory for a member.");
+
+// V11: wires src/core/memoryLayers.js in, which was fully built in V10 but never
+// called from anywhere. Distinct from `remember`/`forget` above: those store
+// short free-text facts fed into AI chat replies. These are structured
+// server-wide notes and simple per-user key/value preferences that any command
+// (present or future) can read back directly, without going through the AI.
+registerCommand("note", "System", async (message,args) => {
+  if (!await requireAdmin(message)) return;
+  const text=args.join(" ").trim();
+  if (!text) return message.reply("❌ Give me something to note, sir. Example: `jarvis note server rules updated on the 1st`.");
+  const cfg=getConfig(message.guild.id);
+  const layers=getMemoryLayers(cfg,message.author.id);
+  const list=[...(layers.server.notes||[])];
+  list.push({ text, by: message.author.tag, at: new Date().toISOString() });
+  if (list.length>50) list.shift();
+  setServer(cfg,"notes",list);
+  saveConfig(message.guild.id,cfg);
+  return message.reply(`📝 Noted, sir. That's server note **#${list.length}**.`);
+}, "Save a persistent server-wide note.");
+
+registerCommand("notes", "System", async (message) => {
+  const cfg=getConfig(message.guild.id);
+  const layers=getMemoryLayers(cfg,message.author.id);
+  const list=layers.server.notes||[];
+  if (!list.length) return message.reply("📝 No server notes yet, sir.");
+  return message.reply(`📝 **JARVIS SERVER NOTES**\n${list.map((n,i)=>`**${i+1}.** ${n.text} — *${n.by}*`).join("\n").slice(0,1900)}`);
+}, "List saved server-wide notes.");
+
+registerCommand("clearnotes", "System", async (message) => {
+  if (!await requireAdmin(message)) return;
+  const cfg=getConfig(message.guild.id);
+  setServer(cfg,"notes",[]);
+  saveConfig(message.guild.id,cfg);
+  return message.reply("🧹 Server notes cleared, sir.");
+}, "Clear all server-wide notes.");
+
+registerCommand("pref", "System", async (message,args) => {
+  const key=args[0]?.toLowerCase().trim();
+  const value=args.slice(1).join(" ").trim();
+  if (!key || !value) return message.reply("❌ Example: `jarvis pref tone formal`.");
+  const cfg=getConfig(message.guild.id);
+  setPreference(cfg,message.author.id,key,value);
+  saveConfig(message.guild.id,cfg);
+  return message.reply(`⚙️ Preference **${key}** set to **${value}**, sir.`);
+}, "Save a personal preference JARVIS remembers about you.");
+
+registerCommand("myprefs", "System", async (message) => {
+  const cfg=getConfig(message.guild.id);
+  const layers=getMemoryLayers(cfg,message.author.id);
+  const entries=Object.entries(layers.preferences||{});
+  if (!entries.length) return message.reply("⚙️ You have no saved preferences yet, sir.");
+  return message.reply(`⚙️ **Your JARVIS preferences**\n${entries.map(([k,v])=>`**${k}**: ${v}`).join("\n")}`);
+}, "Show your saved personal preferences.");
+
+registerCommand("schedule", "System", async (message,args) => {
+  if (!await requireAdmin(message)) return;
+  const sub=(args[0]||"list").toLowerCase();
+  const cfg=getConfig(message.guild.id);
+  cfg.v9.scheduledJobs ??= [];
+
+  if (sub==="add") {
+    const hour=Number(args[1]);
+    const text=args.slice(2).join(" ").trim();
+    if (!Number.isInteger(hour) || hour<0 || hour>23 || !text) {
+      return message.reply("❌ Example: `jarvis schedule add 9 Good morning, standup in 15 minutes.` (hour is 0-23, Cairo time)");
+    }
+    const job={ id: crypto.randomUUID(), type: "message", enabled: true, hour, channelId: message.channel.id, message: text, createdAt: new Date().toISOString() };
+    cfg.v9.scheduledJobs.push(job);
+    saveConfig(message.guild.id,cfg);
+    return message.reply(`📅 Scheduled a daily message in this channel at **${hour}:00** (Cairo time), sir. Job id \`${job.id.slice(0,8)}\`.`);
+  }
+
+  if (sub==="remove") {
+    const idPrefix=(args[1]||"").toLowerCase();
+    const before=cfg.v9.scheduledJobs.length;
+    cfg.v9.scheduledJobs = cfg.v9.scheduledJobs.filter(j=>!j.id.toLowerCase().startsWith(idPrefix));
+    if (cfg.v9.scheduledJobs.length===before) return message.reply("❌ No scheduled job matches that id, sir.");
+    saveConfig(message.guild.id,cfg);
+    return message.reply("🗑️ Scheduled job removed, sir.");
+  }
+
+  if (!cfg.v9.scheduledJobs.length) return message.reply("📅 No scheduled jobs configured, sir. Use `jarvis schedule add <hour> <message>`.");
+  return message.reply(`📅 **JARVIS SCHEDULED JOBS**\n${cfg.v9.scheduledJobs.map(j=>`\`${j.id.slice(0,8)}\` • ${j.hour}:00 Cairo • #${message.guild.channels.cache.get(j.channelId)?.name||"unknown-channel"} • ${j.enabled?"enabled":"disabled"}\n  "${j.message}"`).join("\n")}`);
+}, "Manage recurring scheduled messages (add/remove/list).");
+
+registerCommand("ratecheck", "Security", async (message) => {
+  if (!await requireAdmin(message)) return;
+  const { current, baseline } = getRecentRate(message.guild.id);
+  const spiking = isSpiking(message.guild.id);
+  return message.reply(`📈 **JARVIS ACTIVITY RATE**\nMessages this minute: **${current}**\nRecent baseline (avg/min): **${baseline}**\nSpike detected: **${spiking?"YES":"no"}**${spiking?"\n\nThis is informational only — JARVIS has not taken any action.":""}`);
+}, "Check whether message activity is spiking versus the recent baseline.");
 
 registerCommand("ask", "System", async (message,args) => {
   if (!await requireAdmin(message)) return;
@@ -3225,20 +3361,22 @@ registerCommand(
       `⏰ Understood, sir. I'll remind you in **${args[0]}**.`
     );
 
-    const timer =
-      setTimeout(() => {
-        message.reply(
-          `⏰ **Reminder:** ${text}`
-        ).catch(() => {});
-
-        reminders.delete(timer);
-      }, duration);
-
-    reminders.set(timer, {
-      user: message.author.id
-    });
+    const cfg = getConfig(message.guild.id);
+    const entry = {
+      id: crypto.randomUUID(),
+      guildId: message.guild.id,
+      channelId: message.channel.id,
+      userId: message.author.id,
+      text,
+      fireAt: Date.now() + duration,
+      createdAt: new Date().toISOString()
+    };
+    cfg.reminders = cfg.reminders || [];
+    cfg.reminders.push(entry);
+    saveConfig(message.guild.id, cfg);
+    scheduleReminder(entry);
   },
-  "Create a reminder."
+  "Create a reminder that survives a bot restart."
 );
 
 registerCommand(
@@ -4393,8 +4531,10 @@ client.once(
     console.log("");
 
     startScheduler(client,getConfig);
+    startJobScheduler(client,getConfig,saveConfig);
     startV9Awareness(client,{getConfig,saveConfig,logEvent});
     startDashboard(client,getConfig,getAnalytics,getAIStatus,voice.status());
+    rehydrateReminders();
 
     bot.user.setPresence({
       activities: [

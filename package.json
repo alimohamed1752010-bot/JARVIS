@@ -1,12 +1,12 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "10.0.0",
+  "version": "11.0.0",
   "description": "JARVIS V10 Text Intelligence + British TTS",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "deploy": "node src/deploy-commands.js",
-    "test": "node --test test/v9-core.test.js"
+    "test": "node --test"
   },
   "dependencies": {
     "discord.js": "^14.24.2",
