@@ -652,10 +652,17 @@ function memberFromMention(message) {
 
 function dangerousActionFromText(text) {
   const t = String(text || '').toLowerCase();
+
+  // Natural-language moderation phrases must be recognized as actions too.
+  // In particular, "time him/her/them out" was previously missed because
+  // the parser only recognized "timeout" and "time out". That caused owner
+  // requests such as "Steve swore at me, time him out" to fall through to AI.
   if (/\b(perma(?:nent)?\s+)?ban\b/.test(t)) return 'ban';
   if (/\bkick\b/.test(t)) return 'kick';
-  if (/\btimeout|time out|mute\b/.test(t)) return 'timeout';
-  if (/\bwarn|warning\b/.test(t)) return 'warn';
+  if (
+    /\b(?:timeout|time\s+out|time\s+(?:him|her|them|this\s+user|that\s+user)\s+out|mute)\b/.test(t)
+  ) return 'timeout';
+  if (/\bwarn(?:ing)?\b/.test(t)) return 'warn';
   return null;
 }
 
@@ -840,7 +847,7 @@ async function understandOwnerModeration(message, text) {
       }, -1);
       return score(bNames) - score(aNames);
     });
-    const actionWords = /\b(?:time\s+him\s+out|time\s+her\s+out|time\s+them\s+out|timeout|time\s*out|mute|kick|ban|warn|warning)\b/i;
+    const actionWords = /\b(?:time\s+him\s+out|time\s+her\s+out|time\s+them\s+out|time\s+this\s+user\s+out|time\s+that\s+user\s+out|timeout|time\s*out|mute|kick|ban|warn(?:ing)?)\b/i;
     if (action && actionWords.test(text)) {
       for (const m of ordered) {
         const names = [m.user.username, m.user.globalName, m.displayName, m.user.tag].filter(Boolean);
