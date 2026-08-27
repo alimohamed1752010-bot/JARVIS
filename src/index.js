@@ -56,6 +56,7 @@ const { inspectAudit } = require("./systems/security");
 const { startScheduler } = require("./systems/scheduler");
 const { startDashboard } = require("./dashboard");
 const { buildDynamicDefinitions, executeDynamic } = require("./slashBridge");
+const { safeMath } = require("./v8/tools");
 
 // ============================================================
 // AI DIAGNOSTICS
@@ -1072,7 +1073,8 @@ async function understandOwnerModeration(message, text) {
 
 async function handleOwnerToolRequest(message, input) {
   const text = String(input || '').trim();
-  const math=calculateSimpleMath(text); if(math!==null){ await message.reply(`**${math}, sir.**`); return true; }
+  const math = safeMath(text);
+  if (math !== null) { await message.reply(`**${math}, sir.**`); return true; }
   if (looksLikeClockQuestion(text)) { await message.reply(localDateTimeReply()); return true; }
   const live=await liveDiscordContext(message,text); if(live){ await message.reply(live.slice(0,1900)); return true; }
   if (await understandOwnerModeration(message, text)) return true;
