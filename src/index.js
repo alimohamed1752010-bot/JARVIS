@@ -469,7 +469,7 @@ function isOwnerTarget(message) {
 }
 
 function getDisplayName(user) {
-  return user?.globalName || user?.username || user?.tag || "that user";
+  return user?.globalName || user?.displayName || user?.username || user?.tag || (user?.id ? `User ${user.id}` : "there");
 }
 
 async function generateRoast(message, prompt) {
@@ -618,7 +618,7 @@ Understand first. Answer second. Insult third.`
     return message.reply((reply || `You interrupted me for that, ${requester}? Remarkable.`).slice(0, 1900));
   } catch (error) {
     console.error("[NON-OWNER AI INTERACTION ERROR]", error);
-    return message.reply(`You managed to make a simple request exhausting, ${requester}. Try again.`);
+    return message.reply(`⚠️ My conversational systems are temporarily unavailable, ${requester}.`);
   }
 }
 
