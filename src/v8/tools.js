@@ -26,7 +26,7 @@ async function runToolRequest(message, input) {
     return { handled: true, text: `It is **${localTime()}**, sir.`, tool: 'clock' };
   }
   if (/\b(?:server status|system status|jarvis status)\b/i.test(text)) {
-    return { handled: true, text: `**JARVIS V8 STATUS**\n• Discord: **ONLINE**\n• Server: **${message.guild.name}**\n• Members: **${message.guild.memberCount}**\n• Channels: **${message.guild.channels.cache.size}**\n• AI: **${process.env.AI_ENABLED === 'false' ? 'OFFLINE' : 'READY'}**`, tool: 'server-status' };
+    return { handled: true, text: `**JARVIS V9 STATUS**\n• Discord: **ONLINE**\n• Server: **${message.guild.name}**\n• Members: **${message.guild.memberCount}**\n• Channels: **${message.guild.channels.cache.size}**\n• AI: **${process.env.AI_ENABLED === 'false' ? 'OFFLINE' : 'READY'}**`, tool: 'server-status' };
   }
   return { handled: false };
 }

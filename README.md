@@ -2,9 +2,9 @@
 
 Hardened owner-tool routing so missing/failed helper functions cannot crash normal `jarvis ...` messages. Removed the stale `liveDiscordContext` dependency from the owner-tool path.
 
-# JARVIS V8.1.0 — Ultimate Railway Build
+# JARVIS V9.0.0 — Ultimate Railway Build
 
-JARVIS V8.1.0 is the upgraded continuation of the V7.4 Ultimate Railway bot. It keeps the existing administrator-only Discord management system while adding a real assistant architecture: persistent sessions, memory, fallback AI models, request protection, tools, health diagnostics, usage tracking, and optional voice output.
+JARVIS V9.0.0 is the upgraded continuation of the V7.4 Ultimate Railway bot. It keeps the existing administrator-only Discord management system while adding a real assistant architecture: persistent sessions, memory, fallback AI models, request protection, tools, health diagnostics, usage tracking, and optional voice output.
 
 ## V8.1.0 additions
 
@@ -61,3 +61,12 @@ The existing V7.4 commands, moderation, AutoMod, Anti-Raid, cases, dashboard, re
 ## V8.1.0 hybrid behavior
 
 V8.1.0 deliberately combines V7.4's stronger conversational/roast personality contract with V8's persistent sessions, six-model fallback routing, throttling, diagnostics, tools, dashboard, and optional voice. Authority is always enforced by the application and then reinforced in the AI prompt.
+
+## JARVIS V9.0.0
+
+V9 adds the Intelligent Command System architecture: universal routing, ambiguity-safe resolution, centralized permissions, reusable execution, command context, confirmations, undo, simulation, live awareness, event hooks, and V9 diagnostics.
+
+Useful commands:
+- `jarvis v9`
+- `jarvis undo`
+- `jarvis v9simulate <command>`

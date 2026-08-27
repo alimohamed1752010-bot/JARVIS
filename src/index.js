@@ -61,6 +61,8 @@ const { startScheduler } = require("./systems/scheduler");
 const { startDashboard } = require("./dashboard");
 const { buildDynamicDefinitions, executeDynamic } = require("./slashBridge");
 const { safeMath } = require("./v8/tools");
+const { route: routeV9Command } = require("./core/commandEngine");
+const { start: startV9Awareness } = require("./systems/eventAwareness");
 
 // ============================================================
 // AI DIAGNOSTICS
@@ -157,7 +159,16 @@ function defaultConfig() {
       enabled: false,
       levels: {}
     },
-    security: { antiNuke: true }
+    security: { antiNuke: true },
+    v9: {
+      actionJournal: [],
+      memory: { server: {}, users: {}, preferences: {} },
+      nextActionId: 1,
+      eventAwareness: { enabled: true, voiceMoves: false, logVoiceMoves: false, channels: false, roles: false, members: false, moderation: false },
+      confirmations: { enabled: true, destructiveActions: ["ban", "kick", "timeout"] },
+      simulation: { enabled: true },
+      commandContextTtlMs: 60000
+    }
   };
 }
 
@@ -242,6 +253,14 @@ function normalizeConfig(config) {
   ensureV8(config);
   config.warningEscalation ??= { enabled:false, levels:{} };
   config.security ??= { antiNuke:true };
+  config.v9 ??= {};
+  config.v9.actionJournal ??= [];
+  config.v9.memory = { server:{}, users:{}, preferences:{}, ...(config.v9.memory||{}) };
+  config.v9.memory.server ??= {}; config.v9.memory.users ??= {}; config.v9.memory.preferences ??= {};
+  config.v9.nextActionId ??= (config.v9.actionJournal.at(-1)?.id || 0) + 1;
+  config.v9.eventAwareness = { enabled:true, voiceMoves:false, logVoiceMoves:false, channels:false, roles:false, members:false, moderation:false, ...(config.v9.eventAwareness||{}) };
+  config.v9.confirmations = { enabled:true, destructiveActions:['ban','kick','timeout'], ...(config.v9.confirmations||{}) };
+  config.v9.simulation = { enabled:true, ...(config.v9.simulation||{}) };
   return config;
 }
 
@@ -284,6 +303,47 @@ function clearWarnings(guildId, userId) {
 // Must exist before any commands are registered.
 const textCommands = {};
 
+registerCommand("v9", "System", async (message,args) => {
+  if (!await requireAdmin(message)) return;
+  const cfg=getConfig(message.guild.id);
+  const journalCount=cfg.v9?.actionJournal?.length||0;
+  return message.reply(`🤖 **JARVIS V9.0.0**\n• Command Engine: **ONLINE**\n• Universal Resolver: **ONLINE**\n• Permission Engine: **ONLINE**\n• Action Journal: **${journalCount} entries**\n• Command Context: **ONLINE**\n• Simulation: **${cfg.v9?.simulation?.enabled?'ONLINE':'OFF'}**\n• Event Awareness: **${cfg.v9?.eventAwareness?.enabled?'ONLINE':'OFF'}**`);
+}, "Show JARVIS V9 architecture status.");
+
+registerCommand("undo", "System", async (message,args) => {
+  if (!await requireAdmin(message)) return;
+  const cfg=getConfig(message.guild.id);
+  const { get: getAction, latest } = require("./core/journal");
+  const { undo } = require("./core/executor");
+  const entry=args[0] ? getAction(cfg,args[0]) : latest(cfg,x=>x.reversible);
+  if(!entry) return message.reply("No reversible V9 action was found, sir.");
+  const result=await undo({message,entry,config:cfg,saveConfig});
+  return message.reply(result.text);
+}, "Undo the latest reversible JARVIS V9 action.");
+
+registerCommand("v9simulate", "System", async (message,args) => {
+  if (!await requireAdmin(message)) return;
+  const input=args.join(" ").trim(); if(!input) return message.reply("Give me a command to simulate, sir.");
+  const result=await routeV9Command({message,text:`simulate ${input}`,config:getConfig(message.guild.id),saveConfig});
+  return message.reply(result.text||"No simulation available.");
+}, "Simulate a V9 command without changing the server.");
+
+registerCommand("v9events", "System", async (message,args) => {
+  if (!await requireAdmin(message)) return;
+  const cfg=getConfig(message.guild.id); const mode=(args[0]||'status').toLowerCase();
+  if(mode==='status') return message.reply(`📡 **V9 Event Awareness**\n• System: **${cfg.v9?.eventAwareness?.enabled?'ON':'OFF'}**\n• Voice: **${cfg.v9?.eventAwareness?.voiceMoves?'ON':'OFF'}**\n• Members: **${cfg.v9?.eventAwareness?.members?'ON':'OFF'}**\n• Channels: **${cfg.v9?.eventAwareness?.channels?'ON':'OFF'}**\n• Roles: **${cfg.v9?.eventAwareness?.roles?'ON':'OFF'}**\n• Moderation: **${cfg.v9?.eventAwareness?.moderation?'ON':'OFF'}**`);
+  if(!['on','off'].includes(mode)) return message.reply("Use `jarvis v9events on|off`, sir.");
+  cfg.v9.eventAwareness.enabled=mode==='on'; saveConfig(message.guild.id,cfg); return message.reply(`📡 V9 Event Awareness **${mode.toUpperCase()}**.`);
+}, "Toggle JARVIS V9 event awareness.");
+
+registerCommand("v9tools", "System", async message => {
+  if (!await requireAdmin(message)) return;
+  const {createDefaultRegistry}=require('./core/toolRegistry');
+  const tools=createDefaultRegistry().list();
+  return message.reply(`🧰 **V9 Tool Registry**\n${tools.map(t=>`• **${t.name}** — ${t.description}`).join('\n')}`);
+}, "List JARVIS V9 core tools.");
+
+
 registerCommand("memory", "System", async (message,args) => {
   const cfg=getConfig(message.guild.id); const target=args.find(x=>/^<@!?\d+>$/.test(x))?.match(/\d+/)?.[0] || message.author.id;
   if(args[0]?.toLowerCase()==='clear'){ clearMemory(cfg,message.guild.id,target); saveConfig(message.guild.id,cfg); return message.reply(`🧠 Memory cleared for <@${target}>, sir.`); }
@@ -312,13 +372,13 @@ registerCommand("usage", "System", async (message) => {
 registerCommand("health", "System", async (message) => {
   if (!await requireAdmin(message)) return;
   const h=healthSnapshot({client,getAIStatus,guildCount:client.guilds.cache.size}); const v=voice.status();
-  return message.reply(`🩺 **JARVIS V8 HEALTH**\n• Discord: **${h.discord?'ONLINE':'OFFLINE'}**\n• AI: **${h.ai.configured?'CONFIGURED':'NOT CONFIGURED'}**\n• Primary model: **${h.ai.model}**\n• Fallback: **${h.ai.fallback||'same/none'}**\n• Voice: **${v.enabled&&v.available?'READY':v.enabled?'ENABLED / DEPENDENCIES MISSING':'OFF'}**\n• Uptime: **${Math.floor(h.uptime)}s**\n• RAM: **${h.memoryMB} MB**`);
-}, "Run a JARVIS V8 health check.");
+  return message.reply(`🩺 **JARVIS V9 HEALTH**\n• Discord: **${h.discord?'ONLINE':'OFFLINE'}**\n• AI: **${h.ai.configured?'CONFIGURED':'NOT CONFIGURED'}**\n• Primary model: **${h.ai.model}**\n• Fallback: **${h.ai.fallback||'same/none'}**\n• Voice: **${v.enabled&&v.available?'READY':v.enabled?'ENABLED / DEPENDENCIES MISSING':'OFF'}**\n• Uptime: **${Math.floor(h.uptime)}s**\n• RAM: **${h.memoryMB} MB**`);
+}, "Run a JARVIS V9 health check.");
 
 registerCommand("mode", "System", async (message,args) => {
   if (!await requireAdmin(message)) return;
   const cfg=getConfig(message.guild.id); const modes=['classic','professional','sarcastic','strict','chaotic'];
-  if(!args[0]) return message.reply(`🎛️ **JARVIS V8 Mode:** **${cfg.ai?.personality||'classic'}**\nAvailable: ${modes.join(', ')}`);
+  if(!args[0]) return message.reply(`🎛️ **JARVIS V9 Mode:** **${cfg.ai?.personality||'classic'}**\nAvailable: ${modes.join(', ')}`);
   const mode=args[0].toLowerCase(); if(!modes.includes(mode)) return message.reply(`❌ Available modes: ${modes.join(', ')}`);
   cfg.ai.personality=mode; saveConfig(message.guild.id,cfg); return message.reply(`🎛️ JARVIS is now operating in **${mode}** mode, sir.`);
 }, "Switch JARVIS personality mode.");
@@ -4294,6 +4354,7 @@ client.once(
     console.log("");
 
     startScheduler(client,getConfig);
+    startV9Awareness(client,{getConfig,saveConfig,logEvent});
     startDashboard(client,getConfig,getAnalytics,getAIStatus,voice.status());
 
     bot.user.setPresence({
@@ -4484,6 +4545,24 @@ client.on(
       const nonOwnerInput = rawContent.replace(/\bjarvis\b/ig, "").trim();
       await accessDenied(message, nonOwnerInput);
       return;
+    }
+
+    // ========================================================
+    // V9 INTELLIGENT COMMAND ROUTER
+    // ========================================================
+    if (lower.startsWith("jarvis")) {
+      const v9Input = rawContent.slice(6).trim();
+      if (v9Input) {
+        try {
+          const routed = await routeV9Command({message, text:v9Input, config, saveConfig});
+          if (routed?.handled) {
+            await message.reply(routed.text || "Done, sir.");
+            return;
+          }
+        } catch (error) {
+          console.error("[V9 ROUTER]", error);
+        }
+      }
     }
 
     // ========================================================
