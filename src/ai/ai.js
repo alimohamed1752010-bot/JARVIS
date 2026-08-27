@@ -36,9 +36,9 @@ function transientError(error){
 
 async function generate({guild,member,history,prompt,model,mode='classic',context='',isMaster=false}){
   const ai=await getAIClient();
-  const contents=[...history.slice(-24).map(x=>({role:x.role==='model'?'model':'user',parts:[{text:String(x.text||'')}]})),{role:'user',parts:[{text:context?`${context}\n\nUSER REQUEST:\n${prompt}`:prompt}]}];
+  const contents=[...history.slice(-20).map(x=>({role:x.role==='model'?'model':'user',parts:[{text:String(x.text||'')}]})),{role:'user',parts:[{text:context?`${context}\n\nUSER REQUEST:\n${prompt}`:prompt}]}];
   const now=new Date();
-  const config={systemInstruction:systemPrompt({guild,member,nowUtc:now.toISOString(),nowCairo:cairoNow(),mode,isMaster}),temperature:.72,maxOutputTokens:Number(process.env.AI_MAX_OUTPUT_TOKENS||700),safetySettings:[{category:'HARM_CATEGORY_HARASSMENT',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_HATE_SPEECH',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_SEXUALLY_EXPLICIT',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_DANGEROUS_CONTENT',threshold:'BLOCK_ONLY_HIGH'}]};
+  const config={systemInstruction:systemPrompt({guild,member,nowUtc:now.toISOString(),nowCairo:cairoNow(),mode,isMaster}),temperature:.75,maxOutputTokens:Number(process.env.AI_MAX_OUTPUT_TOKENS||500),safetySettings:[{category:'HARM_CATEGORY_HARASSMENT',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_HATE_SPEECH',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_SEXUALLY_EXPLICIT',threshold:'BLOCK_ONLY_HIGH'},{category:'HARM_CATEGORY_DANGEROUS_CONTENT',threshold:'BLOCK_ONLY_HIGH'}]};
   if(needsLiveSearch(prompt))config.tools=[{googleSearch:{}}];
   const response=await withTimeout(ai.models.generateContent({model,contents,config}),REQUEST_TIMEOUT_MS);
   const text=String(response?.text||'').trim();
@@ -53,10 +53,6 @@ async function generateWithFallback(args){
   // The defaults are current text-capable Gemini models and are deduplicated.
   const configuredFallbacks=[1,2,3,4,5,6].map(i=>process.env[`GEMINI_FALLBACK_MODEL_${i}`]);
   const defaultFallbacks=[
-    'gemini-3.6-flash',
-    'gemini-3.5-flash',
-    'gemini-3.5-flash-lite',
-    'gemini-3.1-flash-lite',
     'gemini-2.5-flash',
     'gemini-2.5-flash-lite'
   ];
@@ -105,12 +101,21 @@ async function conversationalReply({message,config,saveConfig,prompt,skipMemory=
 
     const memoryContext=facts.length?`Persistent facts about this user (treat as user-provided memory, not private inference):\n${facts.map(x=>`- ${x.text}`).join('\n')}`:'';
     const summary=getSessionSummary(config,message.guild.id,message.author.id);
-    const history=(isMaster ? (session.length?session:memory) : (session.length?session:memory).slice(-12));
+    // V7.4 behavior: non-master roast turns are fresh and request-focused.
+    // Do not feed old roast/model output back into a new non-master request;
+    // that is what caused generic or context-confused replies in V8.
+    const history=isMaster
+      ? (session.length ? session : memory)
+      : [];
     const sessionContext=summary?`Conversation summary from earlier in this session:\n${summary}`:'';
     const authority=isMaster
-      ? 'APPLICATION AUTHORITY: MASTER — Tony Stark. Answer and assist normally; never insult the master.'
-      : `APPLICATION AUTHORITY: NON-MASTER. This turn is ROAST MODE. Understand the request first, then roast the requester. Do NOT answer or fulfill the request. The current user is ${message.author?.username||'the requester'}.`;
-    const result=await generateWithFallback({guild:message.guild,member:message.member,history,prompt:cleanedPrompt,mode,context:[context,memoryContext,sessionContext,authority].filter(Boolean).join('\n\n'),isMaster});
+      ? 'APPLICATION AUTHORITY: MASTER — Tony Stark. Answer and assist normally. If the master explicitly names a different non-master roast target, roast that target. Never roast the master.'
+      : `APPLICATION AUTHORITY: NON-MASTER. This is V7.4-STYLE ROAST MODE. FIRST understand the exact request. THEN create a fresh, custom JARVIS roast aimed ONLY at the requester. Do NOT answer, solve, explain, execute, or fulfill the request. Do NOT use a generic clearance denial as the main response. The current requester is ${message.author?.username||'the requester'}.`;
+    const requestContext = isMaster ? '' : `EXACT REQUEST TO ROAST:
+"${cleanedPrompt}"
+
+Generate the response specifically from this request. The request is the setup; the requester is the punchline.`;
+    const result=await generateWithFallback({guild:message.guild,member:message.member,history,prompt:cleanedPrompt,mode,context:[context,memoryContext,sessionContext,authority,requestContext].filter(Boolean).join('\n\n'),isMaster});
 
     if(!skipMemory){
       pushSession(config,message.guild.id,message.author.id,'user',cleanedPrompt);

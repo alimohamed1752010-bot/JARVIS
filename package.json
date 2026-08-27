@@ -1,7 +1,7 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "8.1.0",
-  "description": "JARVIS V8.1.0 Ultimate Railway AI Discord assistant with persistent conversations, hybrid V7.4/V8 master and roast modes, and six configurable Gemini fallbacks.",
+  "version": "8.1.1",
+  "description": "JARVIS V8.1.1 Ultimate Railway AI Discord assistant with the restored V7.4 conversation behavior plus V8 sessions, tools, analytics, voice, and resilient AI handling.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
