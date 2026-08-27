@@ -1,3 +1,7 @@
+## V8.3.2 HOTFIX
+
+Hardened owner-tool routing so missing/failed helper functions cannot crash normal `jarvis ...` messages. Removed the stale `liveDiscordContext` dependency from the owner-tool path.
+
 # JARVIS V8.1.0 — Ultimate Railway Build
 
 JARVIS V8.1.0 is the upgraded continuation of the V7.4 Ultimate Railway bot. It keeps the existing administrator-only Discord management system while adding a real assistant architecture: persistent sessions, memory, fallback AI models, request protection, tools, health diagnostics, usage tracking, and optional voice output.

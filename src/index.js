@@ -1073,23 +1073,54 @@ async function understandOwnerModeration(message, text) {
 
 async function handleOwnerToolRequest(message, input) {
   const text = String(input || '').trim();
-  const math = safeMath(text);
-  if (math !== null) { await message.reply(`**${math}, sir.**`); return true; }
-  if (looksLikeClockQuestion(text)) { await message.reply(localDateTimeReply()); return true; }
-  const live=await liveDiscordContext(message,text); if(live){ await message.reply(live.slice(0,1900)); return true; }
-  if (await understandOwnerModeration(message, text)) return true;
+  if (!text) return false;
 
-  const action = dangerousActionFromText(text);
-  let target = memberFromMention(message);
-  if (!target && action) {
-    const candidate = naturalActionTargetCandidate(text);
-    if (candidate) target = await resolveNaturalMember(message, candidate);
+  // Owner-tool routing must never be able to kill the main JARVIS message
+  // handler. Keep deterministic tools first, then moderation, and let normal
+  // conversation continue when a tool does not recognize the request.
+  try {
+    const math = safeMath(text);
+    if (math !== null) {
+      await message.reply(`**${math}, sir.**`);
+      return true;
+    }
+
+    if (looksLikeClockQuestion(text)) {
+      await message.reply(localDateTimeReply());
+      return true;
+    }
+
+    if (await understandOwnerModeration(message, text)) return true;
+
+    const action = dangerousActionFromText(text);
+    let target = memberFromMention(message);
+
+    if (!target && action) {
+      const candidate = naturalActionTargetCandidate(text);
+      if (candidate) target = await resolveNaturalMember(message, candidate);
+    }
+
+    if (action && target) {
+      const reasonMatch = text.match(/\b(?:because|reason)\b[: ]+(.+)$/i);
+      return confirmModerationAction(
+        message,
+        action,
+        target,
+        reasonMatch?.[1] ||
+          text
+            .replace(/<@!?\d+>/g, '')
+            .replace(/\b(ban|kick|timeout|time out|mute|warn|warning)\b/i, '')
+            .trim()
+      ) || true;
+    }
+
+    return false;
+  } catch (error) {
+    // A missing/failed owner tool should degrade into normal JARVIS
+    // conversation instead of throwing out of MESSAGE_CREATE.
+    console.error('[JARVIS OWNER TOOL ERROR]', error);
+    return false;
   }
-  if (action && target) {
-    const reasonMatch = text.match(/\b(?:because|reason)\b[: ]+(.+)$/i);
-    return confirmModerationAction(message, action, target, reasonMatch?.[1] || text.replace(/<@!?\d+>/g, '').replace(/\b(ban|kick|timeout|time out|mute|warn|warning)\b/i, '').trim()) || true;
-  }
-  return false;
 }
 
 async function requireAdmin(message) {
@@ -4258,7 +4289,11 @@ client.on(
         return;
       }
 
-      if (await handleOwnerToolRequest(message, input)) return;
+      try {
+        if (await handleOwnerToolRequest(message, input)) return;
+      } catch (error) {
+        console.error('[JARVIS OWNER ROUTER ERROR]', error);
+      }
 
       const args =
         input.split(/\s+/);
