@@ -44,7 +44,9 @@ for (const file of fs.readdirSync(slashCommandsPath).filter(f => f.endsWith(".js
 
 const afkStore = new Map();
 const reminders = new Map();
-const { conversationalReply, clearMemory, getAIStatus } = require("./ai");
+const { conversationalReply, clearMemory, getAIStatus, summarizeSession } = require("./ai");
+const { ensureV8, getSession, clearSession, usageSnapshot, healthSnapshot } = require("./v8/core");
+const voice = require("./v8/voice");
 const { addFact, getFacts, clearFacts } = require("./ai/memory");
 const discordTools = require("./tools/discordTools");
 const { recordMessage, getTopUsers, getAnalytics } = require("./systems/analytics");
@@ -138,7 +140,11 @@ function defaultConfig() {
       memory: {},
       facts: {},
       personality: "classic",
-      dailyBriefing: { enabled: false, channelId: null, hour: 9 }
+      dailyBriefing: { enabled: false, channelId: null, hour: 9 },
+      sessions: {},
+      sessionSummaries: {},
+      usage: {},
+      settings: { responseStyle: 'adaptive', webSearch: true, autoSummarize: true }
     },
     warningEscalation: {
       enabled: false,
@@ -226,6 +232,7 @@ function normalizeConfig(config) {
   config.ai.facts ??= {};
   config.ai.personality ??= "classic";
   config.ai.dailyBriefing ??= { enabled:false, channelId:null, hour:9 };
+  ensureV8(config);
   config.warningEscalation ??= { enabled:false, levels:{} };
   config.security ??= { antiNuke:true };
   return config;
@@ -276,12 +283,55 @@ registerCommand("memory", "System", async (message,args) => {
   const mem=cfg.ai?.memory?.[message.guild.id]?.[target] || []; return message.reply(`🧠 Memory entries for <@${target}>: **${mem.length}**.`);
 }, "View or clear JARVIS AI memory.");
 
+registerCommand(["newchat", "resetchat"], "System", async (message) => {
+  if (!await requireAdmin(message)) return;
+  const cfg=getConfig(message.guild.id); clearSession(cfg,message.guild.id,message.author.id); clearMemory(cfg,message.guild.id,message.author.id); saveConfig(message.guild.id,cfg);
+  return message.reply("🧠 Fresh conversation initialized, sir. Previous session context has been cleared.");
+}, "Start a completely fresh JARVIS conversation.");
+
+registerCommand("summarizechat", "System", async (message) => {
+  if (!await requireAdmin(message)) return;
+  const cfg=getConfig(message.guild.id);
+  await message.channel.sendTyping().catch(()=>{});
+  try { return message.reply((await summarizeSession({message,config:cfg,saveConfig})).slice(0,1900)); } catch (e) { console.error('[SESSION SUMMARY]',e); return message.reply('⚠️ I could not summarize the session right now, sir.'); }
+}, "Summarize the current AI conversation into durable context.");
+
+registerCommand("usage", "System", async (message) => {
+  if (!await requireAdmin(message)) return;
+  const cfg=getConfig(message.guild.id); const u=usageSnapshot(cfg,message.guild.id,message.author.id);
+  return message.reply(`📊 **JARVIS AI Usage**\n• Requests: **${u.requests}**\n• Failures: **${u.failures}**\n• Approx. characters processed: **${u.tokens.toLocaleString()}**\n• Session messages: **${u.sessionMessages}**`);
+}, "Show your JARVIS AI usage and session statistics.");
+
+registerCommand("health", "System", async (message) => {
+  if (!await requireAdmin(message)) return;
+  const h=healthSnapshot({client,getAIStatus,guildCount:client.guilds.cache.size}); const v=voice.status();
+  return message.reply(`🩺 **JARVIS V8 HEALTH**\n• Discord: **${h.discord?'ONLINE':'OFFLINE'}**\n• AI: **${h.ai.configured?'CONFIGURED':'NOT CONFIGURED'}**\n• Primary model: **${h.ai.model}**\n• Fallback: **${h.ai.fallback||'same/none'}**\n• Voice: **${v.enabled&&v.available?'READY':v.enabled?'ENABLED / DEPENDENCIES MISSING':'OFF'}**\n• Uptime: **${Math.floor(h.uptime)}s**\n• RAM: **${h.memoryMB} MB**`);
+}, "Run a JARVIS V8 health check.");
+
+registerCommand("mode", "System", async (message,args) => {
+  if (!await requireAdmin(message)) return;
+  const cfg=getConfig(message.guild.id); const modes=['classic','professional','sarcastic','strict','chaotic'];
+  if(!args[0]) return message.reply(`🎛️ **JARVIS V8 Mode:** **${cfg.ai?.personality||'classic'}**\nAvailable: ${modes.join(', ')}`);
+  const mode=args[0].toLowerCase(); if(!modes.includes(mode)) return message.reply(`❌ Available modes: ${modes.join(', ')}`);
+  cfg.ai.personality=mode; saveConfig(message.guild.id,cfg); return message.reply(`🎛️ JARVIS is now operating in **${mode}** mode, sir.`);
+}, "Switch JARVIS personality mode.");
+
 registerCommand("personality", "System", async (message,args) => {
   const cfg=getConfig(message.guild.id); const modes=['classic','professional','sarcastic','strict','chaotic'];
   if(!args[0]) return message.reply(`🎭 Current personality: **${cfg.ai?.personality||'classic'}**. Options: ${modes.join(', ')}.`);
   const mode=args[0].toLowerCase(); if(!modes.includes(mode) && mode!=='custom') return message.reply(`❌ Choose: ${modes.join(', ')}, or custom.`);
   cfg.ai.personality=mode; saveConfig(message.guild.id,cfg); return message.reply(`🎭 JARVIS personality set to **${mode}**, sir.`);
 }, "Configure JARVIS personality.");
+
+registerCommand("voice", "System", async (message,args) => {
+  if (!await requireAdmin(message)) return;
+  const sub=(args[0]||'join').toLowerCase();
+  const vc=message.member?.voice?.channel;
+  if(sub==='leave'){ const existing=message.guild.__jarvisVoiceConnection; existing?.destroy(); delete message.guild.__jarvisVoiceConnection; return message.reply('🔊 Leaving the voice channel, sir.'); }
+  if(!vc) return message.reply('🔊 Join a voice channel first, sir.');
+  if(!voice.status().available) return message.reply('🔊 Voice is not installed in this build. Set the V8 voice dependencies and redeploy.');
+  try { const connection=await voice.join(vc); message.guild.__jarvisVoiceConnection=connection; await voice.speakText(connection,'Voice systems online. I am listening, sir.'); return message.reply(`🔊 Voice systems online in **${vc.name}**, sir.`); } catch(e) { console.error('[VOICE]',e); return message.reply(`❌ Voice startup failed: ${String(e.message||e).slice(0,500)}`); }
+}, "Join your voice channel and let JARVIS speak.");
 
 registerCommand("briefing", "System", async (message,args) => {
   const cfg=getConfig(message.guild.id); if(args[0]?.toLowerCase()==='off'){cfg.ai.dailyBriefing.enabled=false;saveConfig(message.guild.id,cfg);return message.reply('📋 Daily briefing disabled, sir.');}
@@ -3594,7 +3644,7 @@ client.once(
     console.log("");
 
     startScheduler(client,getConfig);
-    startDashboard(client,getConfig,getAnalytics);
+    startDashboard(client,getConfig,getAnalytics,getAIStatus,voice.status());
 
     bot.user.setPresence({
       activities: [
