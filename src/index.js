@@ -46,6 +46,10 @@ for (const file of fs.readdirSync(slashCommandsPath).filter(f => f.endsWith(".js
 
 const afkStore = new Map();
 const reminders = new Map();
+// Pending voice-channel clarifications, keyed by guild + requesting owner.
+// This lets a reply like "general 1" complete the move without requiring
+// the user to repeat the entire command.
+const pendingVoiceMoves = new Map();
 const { conversationalReply, clearMemory, getAIStatus, summarizeSession } = require("./ai");
 const { ensureV8, getSession, clearSession, usageSnapshot, healthSnapshot } = require("./v8/core");
 const voice = require("./v8/voice");
@@ -698,6 +702,18 @@ function naturalVoiceMoveParts(text) {
   return destination ? { target: null, destination } : null;
 }
 
+function normalizeVoiceChannelQuery(query) {
+  let q = String(query || '').trim()
+    .replace(/^<#[0-9]+>\s*$/, '')
+    .replace(/\b(?:vc|voice\s+channel|channel)\b$/i, '')
+    .trim();
+
+  // Human shorthand: "gen 1" / "gen1" should resolve to "general 1".
+  // Keep this intentionally narrow so unrelated channel names are untouched.
+  q = q.replace(/^gen(?:eral)?\s*(\d+)$/i, 'general $1');
+  return q;
+}
+
 function naturalVoiceDisconnectCandidate(text) {
   const raw = String(text || '').trim();
   const patterns = [
@@ -722,7 +738,7 @@ async function confirmModerationAction(message, action, target, reason) {
   return true;
 }
 
-async function executeModerationAction(message, action, member, reason, durationMs = 10 * 60 * 1000) {
+async function executeModerationAction(message, action, member, reason, durationMs = 10 * 60 * 1000, options = {}) {
   const me = message.guild?.members?.me;
   if (!member || !me) return { ok:false, text:'I could not resolve the member or my own server member, sir.' };
   if (member.id === ownerId()) return { ok:false, text:'Absolutely not. I do not take disciplinary action against my master.' };
@@ -780,12 +796,10 @@ async function executeModerationAction(message, action, member, reason, duration
       const voiceChannels = message.guild.channels.cache.filter(c =>
         c.isVoiceBased() && [ChannelType.GuildVoice, ChannelType.GuildStageVoice].includes(c.type)
       );
-      const cleanDestination = destinationQuery
-        .replace(/^<#[0-9]+>\s*$/, '')
-        .replace(/\b(?:vc|voice\s+channel|channel)\b$/i, '')
-        .trim();
+      const rawDestination = options.destinationOverride || destinationQuery;
+      const cleanDestination = normalizeVoiceChannelQuery(rawDestination);
 
-      const mentionedChannel = destinationQuery.match(/^<#(\d+)>$/)?.[1];
+      const mentionedChannel = String(rawDestination).match(/^<#(\d+)>$/)?.[1];
       let matches = mentionedChannel
         ? voiceChannels.filter(c => c.id === mentionedChannel)
         : voiceChannels.filter(c => c.name.toLowerCase() === cleanDestination.toLowerCase());
@@ -804,7 +818,13 @@ async function executeModerationAction(message, action, member, reason, duration
       }
 
       if (matches.size > 1) {
-        const choices = [...matches.values()].slice(0, 10).map(c => `• **${c.name}**`).join('\n');
+        const limited = [...matches.values()].slice(0, 10);
+        pendingVoiceMoves.set(`${message.guild.id}:${message.author.id}`, {
+          memberId: member.id,
+          channelIds: limited.map(c => c.id),
+          expiresAt: Date.now() + 60_000
+        });
+        const choices = limited.map(c => `• **${c.name}**`).join('\n');
         return {
           ok:false,
           text:`I found multiple voice channels matching **${cleanDestination}**. Please specify one:\n${choices}`
@@ -1067,6 +1087,52 @@ async function understandOwnerModeration(message, text) {
      'Owner-directed moderation.');
 
   const result = await executeModerationAction(message, action, target, reason, durationMs);
+  await message.reply(result.text);
+  return true;
+}
+
+async function handlePendingVoiceMove(message, input) {
+  if (!message.guild || !isOwner(message)) return false;
+  const key = `${message.guild.id}:${message.author.id}`;
+  const pending = pendingVoiceMoves.get(key);
+  if (!pending) return false;
+
+  if (Date.now() > pending.expiresAt) {
+    pendingVoiceMoves.delete(key);
+    return false;
+  }
+
+  const query = normalizeVoiceChannelQuery(String(input || ''));
+  if (!query) return false;
+
+  const candidates = pending.channelIds
+    .map(id => message.guild.channels.cache.get(id))
+    .filter(Boolean);
+  if (!candidates.length) {
+    pendingVoiceMoves.delete(key);
+    await message.reply('Those voice-channel options are no longer available, sir.');
+    return true;
+  }
+
+  const exact = candidates.filter(c => c.name.toLowerCase() === query.toLowerCase());
+  const partial = candidates.filter(c => c.name.toLowerCase().includes(query.toLowerCase()));
+  const matches = exact.length ? exact : partial;
+
+  if (matches.length !== 1) {
+    await message.reply(`Please specify one of the listed voice channels, sir.`);
+    return true;
+  }
+
+  const member = message.guild.members.cache.get(pending.memberId) ||
+    await message.guild.members.fetch(pending.memberId).catch(() => null);
+  if (!member) {
+    pendingVoiceMoves.delete(key);
+    await message.reply('I can no longer resolve that member, sir.');
+    return true;
+  }
+
+  pendingVoiceMoves.delete(key);
+  const result = await executeModerationAction(message, 'voicemove', member, 'Owner-directed voice move', 10 * 60 * 1000, { destinationOverride: `<#${matches[0].id}>` });
   await message.reply(result.text);
   return true;
 }
@@ -4190,6 +4256,11 @@ client.on(
     const lower =
       rawContent.toLowerCase();
 
+    // A pending voice-channel clarification is the one exception to the
+    // normal "JARVIS must be mentioned" rule. The owner can answer the
+    // clarification with just a channel name, e.g. "general 1".
+    if (await handlePendingVoiceMove(message, rawContent.trim())) return;
+
     // ========================================================
     // JARVIS MUST BE MENTIONED/USED
     // ========================================================
@@ -4262,9 +4333,6 @@ client.on(
       ).catch(() => {});
     }
 
-    // ========================================================
-    // "JARVIS COMMAND"
-    // ========================================================
 
     if (
       lower.startsWith("jarvis")
