@@ -762,6 +762,68 @@ async function confirmModerationAction(message, action, target, reason) {
   return true;
 }
 
+
+async function resolveVoiceDestination(message, rawDestination) {
+  const cleanDestination = normalizeVoiceChannelQuery(rawDestination);
+  const comparableDestination = comparableVoiceChannelName(cleanDestination);
+  const voiceChannels = message.guild.channels.cache.filter(c =>
+    c.isVoiceBased() && [ChannelType.GuildVoice, ChannelType.GuildStageVoice].includes(c.type)
+  );
+  const mentionedChannel = String(rawDestination || '').match(/^<#(\d+)>$/)?.[1];
+  let matches = mentionedChannel
+    ? voiceChannels.filter(c => c.id === mentionedChannel)
+    : voiceChannels.filter(c => {
+        const channelKeys = voiceChannelAliasKeys(c.name);
+        const destinationKeys = voiceChannelAliasKeys(cleanDestination);
+        return [...channelKeys].some(k => destinationKeys.has(k));
+      });
+
+  if (!matches.size && comparableDestination) {
+    matches = voiceChannels.filter(c => {
+      const name = comparableVoiceChannelName(c.name);
+      return name === comparableDestination ||
+        name.includes(comparableDestination) || comparableDestination.includes(name);
+    });
+  }
+
+  return { cleanDestination, matches };
+}
+
+async function resolveNaturalMoveTargets(message, rawTarget) {
+  const text = String(rawTarget || '').trim();
+  if (!text) return [];
+
+  if (/^(?:me|myself|i)$/i.test(text)) {
+    const me = message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
+    return me ? [me] : [];
+  }
+
+  if (/^(?:everyone|everybody|all(?:\s+members)?|all\s+users)$/i.test(text)) {
+    await discordTools.fetchAllMembers(message.guild);
+    return [...message.guild.members.cache.values()]
+      .filter(m => !m.user.bot && m.voice?.channel);
+  }
+
+  // Support "me and Steve", "Steve and me", and comma-separated names.
+  const pieces = text
+    .replace(/\s+and\s+/gi, ',')
+    .split(',')
+    .map(x => x.trim())
+    .filter(Boolean);
+
+  if (pieces.length > 1) {
+    const resolved = [];
+    for (const piece of pieces) {
+      const member = await resolveNaturalMember(message, piece);
+      if (member && !resolved.some(m => m.id === member.id)) resolved.push(member);
+    }
+    return resolved;
+  }
+
+  const member = await resolveNaturalMember(message, text);
+  return member ? [member] : [];
+}
+
 async function executeModerationAction(message, action, member, reason, durationMs = 10 * 60 * 1000, options = {}) {
   const me = message.guild?.members?.me;
   if (!member || !me) return { ok:false, text:'I could not resolve the member or my own server member, sir.' };
@@ -825,27 +887,7 @@ async function executeModerationAction(message, action, member, reason, duration
         return { ok:false, text:'Which voice channel should I move them to, sir?' };
       }
 
-      const voiceChannels = message.guild.channels.cache.filter(c =>
-        c.isVoiceBased() && [ChannelType.GuildVoice, ChannelType.GuildStageVoice].includes(c.type)
-      );
-      const cleanDestination = normalizeVoiceChannelQuery(rawDestination);
-      const destinationKeys = voiceChannelAliasKeys(cleanDestination);
-
-      const mentionedChannel = String(rawDestination).match(/^<#(\d+)>$/)?.[1];
-      let matches = mentionedChannel
-        ? voiceChannels.filter(c => c.id === mentionedChannel)
-        // Exact canonical match wins. "gen 1" maps only to General 1,
-        // never to Secret General 1.
-        : voiceChannels.filter(c => {
-            const channelKeys = voiceChannelAliasKeys(c.name);
-            return [...channelKeys].some(k => destinationKeys.has(k));
-          });
-
-      if (!matches.size) {
-        matches = voiceChannels.filter(c =>
-          comparableVoiceChannelName(c.name).includes(comparableDestination)
-        );
-      }
+      const { cleanDestination, matches } = await resolveVoiceDestination(message, rawDestination);
 
       if (!matches.size) {
         return {
@@ -1021,24 +1063,64 @@ async function understandOwnerModeration(message, text) {
   let action = dangerousActionFromText(text);
   let durationMs = parseNaturalDuration(text);
 
-  // Voice moves need a destination as well as a member. Resolve the member
-  // first, then let the executor resolve/validate the destination channel.
+  // Voice moves support one or many targets, including "me", "me and Steve",
+  // and "everyone". Resolve the destination once, then execute directly by ID.
   if (action === 'voicemove') {
     const parts = naturalVoiceMoveParts(text);
-    if (!target && parts?.target) target = await resolveNaturalMember(message, parts.target);
-
-    // Target-first phrasing: find a named member in the sentence.
-    if (!target) {
-      await discordTools.fetchAllMembers(message.guild);
-      const lowerText = text.toLowerCase();
-      for (const m of message.guild.members.cache.values()) {
-        const names = [m.user.username, m.user.globalName, m.displayName, m.user.tag].filter(Boolean);
-        if (names.some(name => lowerText.includes(String(name).toLowerCase()))) {
-          target = m;
-          break;
-        }
-      }
+    const targets = target ? [target] : await resolveNaturalMoveTargets(message, parts?.target);
+    if (!targets.length) {
+      await message.reply('I could not resolve anyone to move, sir.');
+      return true;
     }
+
+    if (!parts?.destination) {
+      await message.reply('Which voice channel should I move them to, sir?');
+      return true;
+    }
+
+    const destinationResult = await resolveVoiceDestination(message, parts.destination);
+    const matches = destinationResult.matches;
+    if (!matches.size) {
+      await message.reply(`I couldn't find a voice channel matching **${destinationResult.cleanDestination}**, sir.`);
+      return true;
+    }
+    if (matches.size > 1) {
+      const limited = [...matches.values()].slice(0, 10);
+      pendingVoiceMoves.set(`${message.guild.id}:${message.author.id}`, {
+        memberIds: targets.map(m => m.id),
+        channelIds: limited.map(c => c.id),
+        expiresAt: Date.now() + 60_000
+      });
+      const choices = limited.map((c, i) => `**${i + 1}.** 🔊 ${c.name}`).join('\n');
+      await message.reply(`I found multiple voice channels matching **${destinationResult.cleanDestination}**. Please specify one:\n${choices}`);
+      return true;
+    }
+
+    const destination = matches.first();
+    const movable = targets.filter(m => m.voice?.channel);
+    if (!movable.length) {
+      await message.reply('None of the requested members are currently in a voice channel, sir.');
+      return true;
+    }
+
+    const results = [];
+    for (const member of movable) {
+      const result = await executeModerationAction(
+        message, 'voicemove', member, 'Owner-directed voice move', 10 * 60 * 1000,
+        { destinationOverride: `<#${destination.id}>` }
+      );
+      results.push({ member, result });
+    }
+    const failed = results.filter(x => !x.result.ok);
+    const success = results.filter(x => x.result.ok);
+    if (success.length && !failed.length) {
+      await message.reply(`Done, sir. Moved **${success.length}** participant${success.length === 1 ? '' : 's'} to **${destination.name}**.`);
+    } else if (success.length) {
+      await message.reply(`Done, sir. Moved **${success.length}** participant${success.length === 1 ? '' : 's'} to **${destination.name}**.\n\nUnable to move **${failed.length}**: ${failed.map(x => x.result.text).join(' ')}`);
+    } else {
+      await message.reply(failed.map(x => x.result.text).join('\n'));
+    }
+    return true;
   }
 
   if (action === 'voicedisconnect' && !target) {
@@ -1202,29 +1284,45 @@ async function handlePendingVoiceMove(message, input) {
     return false;
   }
 
-  const member = message.guild.members.cache.get(pending.memberId) ||
-    await message.guild.members.fetch(pending.memberId).catch(() => null);
-  if (!member) {
+  const memberIds = Array.isArray(pending.memberIds) ? pending.memberIds : [pending.memberId];
+  const members = [];
+  for (const id of memberIds) {
+    const member = message.guild.members.cache.get(id) ||
+      await message.guild.members.fetch(id).catch(() => null);
+    if (member) members.push(member);
+  }
+  if (!members.length) {
     pendingVoiceMoves.delete(key);
-    await message.reply('I can no longer resolve that member, sir.');
+    await message.reply('I can no longer resolve anyone from that move request, sir.');
     return true;
   }
 
   const destination = matches[0];
   pendingVoiceMoves.delete(key);
 
-  // Execute directly with the already-selected channel ID. This prevents
-  // the original natural-language parser from reinterpreting the reply and
-  // asking for a destination all over again.
-  const result = await executeModerationAction(
-    message,
-    'voicemove',
-    member,
-    'Owner-directed voice move',
-    10 * 60 * 1000,
-    { destinationOverride: `<#${destination.id}>` }
-  );
-  await message.reply(result.text);
+  const movable = members.filter(m => m.voice?.channel);
+  if (!movable.length) {
+    await message.reply('None of the requested members are currently in a voice channel, sir.');
+    return true;
+  }
+
+  const results = [];
+  for (const member of movable) {
+    const result = await executeModerationAction(
+      message, 'voicemove', member, 'Owner-directed voice move', 10 * 60 * 1000,
+      { destinationOverride: `<#${destination.id}>` }
+    );
+    results.push(result);
+  }
+  const success = results.filter(r => r.ok).length;
+  const failed = results.filter(r => !r.ok);
+  if (success && !failed.length) {
+    await message.reply(`Done, sir. Moved **${success}** participant${success === 1 ? '' : 's'} to **${destination.name}**.`);
+  } else if (success) {
+    await message.reply(`Done, sir. Moved **${success}** participant${success === 1 ? '' : 's'} to **${destination.name}**.\n\nUnable to move **${failed.length}** participant${failed.length === 1 ? '' : 's'}.`);
+  } else {
+    await message.reply(failed.map(r => r.text).join('\n'));
+  }
   return true;
 }
 async function handleOwnerToolRequest(message, input) {
