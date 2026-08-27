@@ -765,7 +765,12 @@ async function confirmModerationAction(message, action, target, reason) {
 async function executeModerationAction(message, action, member, reason, durationMs = 10 * 60 * 1000, options = {}) {
   const me = message.guild?.members?.me;
   if (!member || !me) return { ok:false, text:'I could not resolve the member or my own server member, sir.' };
-  if (member.id === ownerId()) return { ok:false, text:'Absolutely not. I do not take disciplinary action against my master.' };
+  // The owner is protected from disciplinary actions, but a voice move is
+  // not disciplinary. The owner must be allowed to move themselves between
+  // voice channels when explicitly requested.
+  if (member.id === ownerId() && action !== 'voicemove') {
+    return { ok:false, text:'Absolutely not. I do not take disciplinary action against my master.' };
+  }
   if (member.id === message.guild.ownerId && member.id !== message.author.id) return { ok:false, text:'I cannot moderate the server owner. Discord hierarchy will not permit it.' };
   if (member.id === me.id) return { ok:false, text:'I shall decline to moderate myself, sir.' };
 
