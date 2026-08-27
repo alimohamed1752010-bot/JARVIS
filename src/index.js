@@ -715,6 +715,7 @@ function normalizeVoiceChannelQuery(query) {
   // Human shorthand: "gen 1" / "gen1" should resolve to "general 1".
   // Keep this intentionally narrow so unrelated channel names are untouched.
   q = q.replace(/^gen(?:eral)?\s*(\d+)$/i, 'general $1');
+  q = q.replace(/^sec(?:ret)?\s+gen(?:eral)?\s*(\d+)$/i, 'secret general $1');
   return q;
 }
 
@@ -725,6 +726,16 @@ function comparableVoiceChannelName(value) {
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+}
+
+function voiceChannelAliasKeys(value) {
+  const raw = comparableVoiceChannelName(value);
+  const keys = new Set([raw]);
+  const gen = raw.match(/^gen(?:eral)?\s*(\d+)$/i);
+  if (gen) keys.add(`general ${gen[1]}`);
+  const sec = raw.match(/^sec(?:ret)?\s+gen(?:eral)?\s*(\d+)$/i);
+  if (sec) keys.add(`secret general ${sec[1]}`);
+  return keys;
 }
 
 function naturalVoiceDisconnectCandidate(text) {
@@ -813,14 +824,17 @@ async function executeModerationAction(message, action, member, reason, duration
         c.isVoiceBased() && [ChannelType.GuildVoice, ChannelType.GuildStageVoice].includes(c.type)
       );
       const cleanDestination = normalizeVoiceChannelQuery(rawDestination);
-      const comparableDestination = comparableVoiceChannelName(cleanDestination);
+      const destinationKeys = voiceChannelAliasKeys(cleanDestination);
 
       const mentionedChannel = String(rawDestination).match(/^<#(\d+)>$/)?.[1];
       let matches = mentionedChannel
         ? voiceChannels.filter(c => c.id === mentionedChannel)
-        // IMPORTANT: exact normalized name wins.
-        // "General 1" must not also match "Secret General 1".
-        : voiceChannels.filter(c => comparableVoiceChannelName(c.name) === comparableDestination);
+        // Exact canonical match wins. "gen 1" maps only to General 1,
+        // never to Secret General 1.
+        : voiceChannels.filter(c => {
+            const channelKeys = voiceChannelAliasKeys(c.name);
+            return [...channelKeys].some(k => destinationKeys.has(k));
+          });
 
       if (!matches.size) {
         matches = voiceChannels.filter(c =>
@@ -927,6 +941,9 @@ async function resolveNaturalMember(message, candidate) {
     .replace(/[,.!?]+$/, '')
     .trim();
   if (!cleaned) return null;
+  if (/^(?:me|myself|i)$/i.test(cleaned)) {
+    return message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
+  }
   const mentioned = message.mentions.members.find(m => m.id === cleaned) || message.mentions.members.first();
   if (mentioned) return mentioned;
   if (/^\d{15,25}$/.test(cleaned)) return message.guild.members.cache.get(cleaned) || await message.guild.members.fetch(cleaned).catch(() => null);
@@ -1151,9 +1168,11 @@ async function handlePendingVoiceMove(message, input) {
   }
 
   if (!matches.length) {
-    const exact = candidates.filter(c =>
-      comparableVoiceChannelName(c.name) === comparableQuery
-    );
+    const queryKeys = voiceChannelAliasKeys(query);
+    const exact = candidates.filter(c => {
+      const channelKeys = voiceChannelAliasKeys(c.name);
+      return [...channelKeys].some(k => queryKeys.has(k));
+    });
     if (exact.length) {
       matches = exact;
     } else {
