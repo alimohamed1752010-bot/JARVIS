@@ -4587,6 +4587,83 @@ client.on(
     // clarification with just a channel name, e.g. "general 1".
     if (await handlePendingVoiceMove(message, rawContent.trim())) return;
 
+    // V14.5.7 SERVER DIRECT-REPLY TRIGGER
+    // Replying directly to a JARVIS message in a server is an invocation.
+    // This is intentionally owner-only, just like the DM reply trigger.
+    // Do not depend on the referenced message being cached: fetchReference()
+    // handles partial messages when the Message partial is enabled above.
+    // The bot must be the author of the referenced message, so replying to
+    // another user's message can never accidentally wake JARVIS.
+    let directJarvisReply = false;
+    if (message.guild && message.reference?.messageId && isOwner(message)) {
+      const referenced = await message.fetchReference().catch(() => null);
+      directJarvisReply = Boolean(
+        referenced?.author?.id &&
+        client.user?.id &&
+        referenced.author.id === client.user.id
+      );
+
+      if (directJarvisReply) {
+        console.log(`[JARVIS REPLY TRIGGER] ${message.author.tag}: ${rawContent}`);
+
+        try {
+          await message.channel.sendTyping().catch(() => {});
+
+          // A direct reply behaves like a normal owner JARVIS request, but
+          // without requiring the word "jarvis". The V11 agent gets first
+          // chance so natural-language server actions work exactly like
+          // explicit JARVIS requests; the normal conversational pipeline is
+          // the safe fallback for questions/chat/tool requests it handles.
+          try {
+            const confirmed = await confirmV11Plan({
+              message,
+              text: rawContent,
+              config,
+              saveConfig
+            });
+            if (confirmed?.handled) {
+              await message.reply(confirmed.text || "Done, sir.");
+              return;
+            }
+          } catch (error) {
+            console.error('[V14.5.7 REPLY V11 AGENT]', error);
+          }
+
+          try {
+            const agent = await runAgent({
+              message,
+              prompt: rawContent,
+              config,
+              saveConfig
+            });
+            if (agent?.handled) {
+              await message.reply(agent.text || "Done, sir.");
+              return;
+            }
+          } catch (error) {
+            console.error('[V14.5.7 REPLY AGENT]', error);
+          }
+
+          const reply = await conversationalReply({
+            message,
+            config,
+            saveConfig,
+            prompt: rawContent,
+            mode: config.ai?.personality || 'classic',
+            context: `The owner is replying directly to a JARVIS message in server #${message.channel?.name || 'unknown'}. Treat this as a direct JARVIS invocation; do not require the word JARVIS.`
+          });
+
+          if (reply) {
+            await message.reply(reply.slice(0, 1900));
+          }
+        } catch (error) {
+          console.error('[V14.5.7 SERVER REPLY TRIGGER]', error);
+          await message.reply('⚠️ My AI systems are temporarily unavailable, sir.').catch(() => {});
+        }
+        return;
+      }
+    }
+
     // ========================================================
     // JARVIS MUST BE MENTIONED/USED
     // ========================================================

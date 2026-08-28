@@ -94,3 +94,18 @@ test('V14.5.5 role command parser accepts quoted and unquoted role names',()=>{
   }
 });
 
+
+test('V14.5.5 calculator evaluates chained multiplication',()=>{
+  const {safeMath}=require('../src/v8/tools');
+  assert.equal(safeMath('5x5'), '25');
+  assert.equal(safeMath('5 x 5 x 5'), '125');
+  assert.equal(safeMath('whats 5 x 5 x 5'), '125');
+  assert.equal(safeMath("what's 5x5x5"), '125');
+});
+
+test('V14.5.5 calculator respects operator precedence without eval',()=>{
+  const {safeMath}=require('../src/v8/tools');
+  assert.equal(safeMath('2 + 3 x 4'), '14');
+  assert.equal(safeMath('2 x 3 + 4 x 5'), '26');
+  assert.equal(safeMath('5 x 5 x 5'), '125');
+});

@@ -1,17 +1,49 @@
 function safeMath(input) {
   const raw = String(input || '').trim().replace(/,/g, '');
-  const m = raw.match(/(?:what\s+is\s+|calculate\s+|compute\s+)?(-?\d+(?:\.\d+)?)\s*(\+|-|\*|x|×|\/|÷|%|\^|minus|plus|times)\s*(-?\d+(?:\.\d+)?)/i);
-  if (!m) return null;
-  const a = Number(m[1]); const b = Number(m[3]); const op = m[2].toLowerCase();
-  let result;
-  if (['*','x','×','times'].includes(op)) result = a*b;
-  else if (['+','plus'].includes(op)) result = a+b;
-  else if (['-','minus'].includes(op)) result = a-b;
-  else if (['/','÷'].includes(op)) result = b === 0 ? null : a/b;
-  else if (op === '%') result = b === 0 ? null : a%b;
-  else if (op === '^') result = a**b;
-  if (!Number.isFinite(result)) return null;
-  return Number.isInteger(result) ? String(result) : String(Number(result.toFixed(10)));
+  const expression = raw
+    .replace(/^(?:what(?:'s|s)?\s+(?:is\s+)?|calculate\s+|compute\s+)/i, '')
+    .trim();
+  if (!expression) return null;
+
+  // Tokenize only numbers and the supported arithmetic operators. No eval.
+  const tokens = expression.match(/-?(?:\d+(?:\.\d+)?|\.\d+)|(?:\*\*|[+\-*/x×÷%^])/gi);
+  if (!tokens || tokens.join('') !== expression.replace(/\s+/g, '')) return null;
+  if (tokens.length < 3 || tokens.length % 2 === 0) return null;
+
+  const values = [];
+  const operators = [];
+  const precedence = op => (op === '^' || op === '**') ? 3 : (op === '*' || op === 'x' || op === '×' || op === '/' || op === '÷' || op === '%') ? 2 : 1;
+  const apply = () => {
+    const op = operators.pop();
+    const b = values.pop(); const a = values.pop();
+    if (a === undefined || b === undefined) throw new Error('invalid expression');
+    let r;
+    if (['*','x','×'].includes(op)) r = a * b;
+    else if (['+'].includes(op)) r = a + b;
+    else if (['-'].includes(op)) r = a - b;
+    else if (['/','÷'].includes(op)) { if (b === 0) throw new Error('division by zero'); r = a / b; }
+    else if (op === '%') { if (b === 0) throw new Error('division by zero'); r = a % b; }
+    else if (['^','**'].includes(op)) r = a ** b;
+    if (!Number.isFinite(r)) throw new Error('non-finite result');
+    values.push(r);
+  };
+
+  try {
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      if (/^-?(?:\d+(?:\.\d+)?|\.\d+)$/.test(token)) {
+        values.push(Number(token));
+      } else {
+        const op = token.toLowerCase();
+        while (operators.length && precedence(operators[operators.length - 1]) >= precedence(op) && op !== '^' && op !== '**') apply();
+        operators.push(op);
+      }
+    }
+    while (operators.length) apply();
+    if (values.length !== 1) return null;
+    const result = values[0];
+    return Number.isInteger(result) ? String(result) : String(Number(result.toFixed(10)));
+  } catch { return null; }
 }
 
 function localTime() {
