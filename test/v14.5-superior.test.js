@@ -21,3 +21,18 @@ test('V14.5 autopilot receives saveConfig dependency',()=>{
   assert.match(s,/function start\(client,\{getConfig,saveConfig,logEvent,recordKnowledge\}\)/);
 });
 
+
+
+test('V14.5 agent does not turn planner failure into a user-facing plan error',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'..','src/core/agent.js'),'utf8');
+  const guard=source.indexOf('if (!rawPlan) return {handled:false};');
+  const validation=source.indexOf('const validation=validatePlan(rawPlan,message.guild);');
+  assert.ok(guard>=0, 'null planner guard is missing');
+  assert.ok(validation>guard, 'validation must happen after the null-plan guard');
+});
+
+test('V14.5 planner parser tolerates a JSON preamble from the model',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'..','src/ai/ai.js'),'utf8');
+  assert.match(source,/if \(!raw\.startsWith\('\{'\)\)/);
+  assert.match(source,/lastIndexOf\('\}'\)/);
+});

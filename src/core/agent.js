@@ -231,6 +231,15 @@ async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
   const deterministicPlan=deterministicAgentPlan(raw);
   if(deterministicPlan?.steps?.length===1&&deterministicPlan.steps[0].action==='undo'){const entry=journal.latest(config,e=>e.reversible&&e.status==='SUCCESS');if(!entry)return{handled:true,text:'I could not find a recent reversible JARVIS action, sir.'};const result=await undo({message,entry,config,saveConfig});return{handled:true,text:result.text};}
   const session=getSession(config,message.guild.id,message.author.id)||[]; const recentContext=session.slice(-10).map(x=>`${x.role==='model'?'JARVIS':'USER'}: ${String(x.text||'').slice(0,500)}`).join('\n'); const live=await awareness.snapshot(message.guild).catch(()=>null); const liveContext=live?`LIVE SERVER CONTEXT (reference only; do not invent beyond this):\n${awareness.format(live)}`:''; const knowledge=serverKnowledge.context(config,message.guild.id); const plannerPrompt=[liveContext,knowledge,recentContext?`RECENT CONVERSATION CONTEXT:\n${recentContext}`:'',`CURRENT REQUEST:\n${raw}`].filter(Boolean).join('\n\n'); const rawPlan=deterministicPlan||await parseAgentPlan({message,prompt:plannerPrompt});
+
+  // Planner failure is NOT a failed user request. A null plan means the AI
+  // planner could not classify the message as an executable Discord action
+  // (or the planner temporarily failed). Fall through to the normal V9 /
+  // conversational pipeline so questions such as "what is 5x5x5?" or
+  // "who is Michael Jackson?" are answered by JARVIS instead of producing
+  // the misleading "no valid plan" error.
+  if (!rawPlan) return {handled:false};
+
   const validation=validatePlan(rawPlan,message.guild);
   if(!validation.ok){ return {handled:true,text:`I couldn't safely build that plan, sir.\n${validation.errors.slice(0,5).map(x=>`• ${x}`).join('\n')}`}; }
   const plan=validation.plan;

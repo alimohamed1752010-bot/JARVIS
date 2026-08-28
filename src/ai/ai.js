@@ -237,7 +237,15 @@ Rules:
 USER REQUEST: ${String(prompt||'').slice(0,3000)}`;
   try {
     const result=await generateWithFallback({guild:message.guild,member:message.member,history:[],prompt:instruction,mode:'professional',context:'STRICT JSON ONLY. Planning only.',isMaster:true});
-    const raw=String(result.text||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
+    let raw=String(result.text||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
+    // Gemini occasionally wraps otherwise-valid JSON in a short preamble.
+    // Extract the outermost JSON object before parsing, without accepting
+    // arbitrary prose as a plan.
+    if (!raw.startsWith('{')) {
+      const start=raw.indexOf('{');
+      const end=raw.lastIndexOf('}');
+      if (start>=0 && end>start) raw=raw.slice(start,end+1);
+    }
     return JSON.parse(raw);
   } catch(error) { console.warn('[AI AGENT PLANNER]',error?.message||error); return null; }
 }
