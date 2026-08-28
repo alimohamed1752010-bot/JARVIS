@@ -65,3 +65,32 @@ test('V14.5.4 channel resolver normalizes punctuation and sec shorthand',()=>{
   assert.equal(r.status,'resolved');
   assert.equal(r.channel.id,'1');
 });
+
+test('V14.5.5 role command parser accepts "make the role" wording',()=>{
+  const {deterministicAgentPlan}=require('../src/core/agent');
+  const plan=deterministicAgentPlan('make the role named "labubu" with soundboard access perms and give it to seif');
+  assert.ok(plan);
+  assert.equal(plan.needsConfirmation,false);
+  assert.equal(plan.steps.length,2);
+  assert.equal(plan.steps[0].action,'role_create');
+  assert.equal(plan.steps[0].name,'labubu');
+  assert.deepEqual(plan.steps[0].permissionChanges,[{permission:'soundboard access perms',enabled:true}]);
+  assert.equal(plan.steps[1].action,'role_add');
+  assert.equal(plan.steps[1].role,'labubu');
+  assert.deepEqual(plan.steps[1].targets,['seif']);
+});
+
+test('V14.5.5 role command parser accepts quoted and unquoted role names',()=>{
+  const {deterministicAgentPlan}=require('../src/core/agent');
+  const quoted=deterministicAgentPlan('create a role named "Lab Staff" with use soundboard and give it to Seif');
+  const unquoted=deterministicAgentPlan('create the role named Lab Staff with use soundboard and give it to Seif');
+  for(const plan of [quoted,unquoted]){
+    assert.ok(plan);
+    assert.equal(plan.steps[0].action,'role_create');
+    assert.equal(plan.steps[0].name,'Lab Staff');
+    assert.equal(plan.steps[0].permissionChanges[0].permission,'use soundboard');
+    assert.equal(plan.steps[1].action,'role_add');
+    assert.deepEqual(plan.steps[1].targets,['Seif']);
+  }
+});
+
