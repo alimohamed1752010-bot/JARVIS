@@ -22,74 +22,27 @@ const HIGH_RISK = new Set(['ban','kick','timeout','role_permissions','role_add',
 // The AI planner remains the primary natural-language planner, but a temporary
 // model failure must not turn a clearly structured request into "no valid plan".
 function deterministicAgentPlan(prompt) {
-  const raw = String(prompt || '').replace(/^jarvis\b[,:!\s-]*/i, '').trim();
-  if (!raw) return null;
-
-  // Example:
-  // "make a role named "...", with soundboard access, and then give it to Doctor Strange"
-  // This intentionally supports quoted role names so punctuation such as "..." is
-  // preserved exactly instead of being treated as missing data.
-  let m = raw.match(/^(?:make|create)\s+(?:a\s+)?role\s+named\s+["“](.+?)["”]\s*,?\s*(?:with|that\s+has)\s+(.+?)\s*(?:,?\s+and\s+then|\s+then)\s+(?:give|add)\s+(?:it|that\s+role|the\s+role)\s+to\s+(.+)$/i);
-  if (!m) {
-    m = raw.match(/^(?:make|create)\s+(?:a\s+)?role\s+named\s+["“](.+?)["”]\s*,?\s*(?:with|that\s+has)\s+(.+?)\s*(?:,?\s+and)\s+(?:give|add)\s+(?:it|that\s+role|the\s+role)\s+to\s+(.+)$/i);
-  }
-  if (m) {
-    const roleName = m[1].trim();
-    const permissionText = m[2].trim();
-    const targetText = m[3].trim();
-    const permissionChanges = [];
-    for (const part of permissionText.split(/\s*(?:,|and)\s*/i)) {
-      const x = part.trim();
-      if (!x) continue;
-      const off = x.match(/^(?:without|no|remove|deny|disable|take away|revoke)\s+(.+?)\s+access$/i);
-      const on = x.match(/^(?:with|has|have|allow|enable|grant|give)\s+(.+?)\s+access$/i);
-      if (off) permissionChanges.push({ permission: off[1].trim(), enabled: false });
-      else if (on) permissionChanges.push({ permission: on[1].trim(), enabled: true });
-      else if (/^soundboard(?:\s+access)?$/i.test(x)) permissionChanges.push({ permission: 'soundboard', enabled: true });
-      else permissionChanges.push({ permission: x.replace(/\s+access$/i, '').trim(), enabled: true });
-    }
-    if (roleName && targetText && permissionChanges.length) {
-      return {
-        summary: `Create role "${roleName}" with the requested permissions and assign it to ${targetText}.`,
-        needsConfirmation: true,
-        steps: [
-          {
-            action: 'role_create',
-            targets: [],
-            excludeTargets: [],
-            source: '',
-            destination: '',
-            role: '',
-            channel: '',
-            parent: '',
-            channelType: 'text',
-            name: roleName,
-            permissionChanges,
-            reason: 'Owner-directed role creation',
-            durationMs: 600000
-          },
-          {
-            action: 'role_add',
-            targets: [targetText],
-            excludeTargets: [],
-            source: '',
-            destination: '',
-            role: roleName,
-            channel: '',
-            parent: '',
-            channelType: 'text',
-            name: '',
-            permissionChanges: [],
-            reason: 'Owner-directed role assignment',
-            durationMs: 600000
-          }
-        ]
-      };
-    }
-  }
-
+  const raw=String(prompt||'').replace(/^jarvis\b[,:!\s-]*/i,'').trim();
+  if(!raw)return null;
+  const base=(action,extra={})=>({action,targets:[],excludeTargets:[],source:'',destination:'',role:'',channel:'',parent:'',channelType:'text',name:'',permissionChanges:[],reason:'Owner-directed JARVIS action',durationMs:600000,...extra});
+  if(/^(?:undo|reverse|revert)(?:\s+(?:the\s+)?(?:last|previous)(?:\s+(?:thing|action|change|command))?(?:\s+jarvis\s+(?:did|made))?)?\s*$/i.test(raw))return{summary:'Undo the most recent reversible JARVIS action.',needsConfirmation:false,steps:[base('undo')]};
+  let m=raw.match(/^(?:move|drag|send)\s+(everyone|everybody|all)\s+in\s+(.+?)\s+(?:to|into)\s+(.+?)(?:\s+except\s+(.+))?$/i);
+  if(m)return{summary:`Move everyone from ${m[2].trim()} to ${m[3].trim()}.`,needsConfirmation:false,steps:[base('voicemove',{targets:['everyone'],source:m[2].trim(),destination:m[3].trim(),excludeTargets:m[4]?splitVoiceTargets(m[4]):[]})]};
+  m=raw.match(/^(?:move|drag|send)\s+(.+?)\s+(?:from\s+(.+?)\s+)?(?:to|into)\s+(.+)$/i);
+  if(m){let targetText=m[1].trim(),source=(m[2]||'').trim(),excludeTargets=[];const ex=targetText.match(/^(.+?)\s+except\s+(.+)$/i);if(ex){targetText=ex[1].trim();excludeTargets=splitVoiceTargets(ex[2]);}return{summary:`Move ${targetText} to ${m[3].trim()}.`,needsConfirmation:false,steps:[base('voicemove',{targets:splitVoiceTargets(targetText),excludeTargets,source,destination:m[3].trim()})]};}
+  m=raw.match(/^(?:make|create)\s+(?:a\s+)?role\s+named\s+["“](.+?)["”]\s*,?\s*(?:with|that\s+has)\s+(.+?)\s*(?:,?\s+and\s+then|\s+then)\s+(?:give|add)\s+(?:it|that\s+role|the\s+role)\s+to\s+(.+)$/i);
+  if(!m)m=raw.match(/^(?:make|create)\s+(?:a\s+)?role\s+named\s+["“](.+?)["”]\s*,?\s*(?:with|that\s+has)\s+(.+?)\s*,?\s+and\s+(?:give|add)\s+(?:it|that\s+role|the\s+role)\s+to\s+(.+)$/i);
+  if(m){const permissionChanges=parsePermissionList(m[2]);if(m[1].trim()&&permissionChanges.length&&m[3].trim())return{summary:`Create role "${m[1].trim()}" with the requested permissions and assign it to ${m[3].trim()}.`,needsConfirmation:true,steps:[base('role_create',{name:m[1].trim(),permissionChanges}),base('role_add',{role:m[1].trim(),targets:splitVoiceTargets(m[3].trim())})]};}
+  m=raw.match(/^(?:make|create)\s+(?:a\s+)?(?:text\s+)?channel\s+named\s+["“]?(.+?)["”]?\s+in\s+(?:a\s+)?(?:category|catagory)\s+named\s+["“]?(.+?)["”]?\s*$/i);
+  if(m)return{summary:`Create channel "${m[1].trim()}" in category "${m[2].trim()}".`,needsConfirmation:true,steps:[base('channel_create',{name:m[1].trim(),parent:m[2].trim(),channelType:'text',createParentIfMissing:true})]};
+  m=raw.match(/^(?:make|create)\s+(?:a\s+)?(voice|stage|forum|announcement|text|category)\s+channel\s+named\s+["“]?(.+?)["”]?\s*$/i);
+  if(m)return{summary:`Create ${m[1].toLowerCase()} channel "${m[2].trim()}".`,needsConfirmation:true,steps:[base('channel_create',{name:m[2].trim(),channelType:m[1].toLowerCase()})]};
+  m=raw.match(/^(?:make|create)\s+(?:a\s+)?channel\s+named\s+["“]?(.+?)["”]?\s*$/i);
+  if(m)return{summary:`Create channel "${m[1].trim()}".`,needsConfirmation:true,steps:[base('channel_create',{name:m[1].trim(),channelType:'text'})]};
   return null;
 }
+function splitVoiceTargets(text=''){return String(text).replace(/\s+(?:and|n|&)\s+/gi,',').split(',').map(x=>x.trim()).filter(Boolean);}
+function parsePermissionList(text=''){const changes=[];for(const part of String(text).split(/\s*(?:,|\band\b)\s*/i)){const x=part.trim();if(!x)continue;const off=x.match(/^(?:without|no|remove|deny|disable|take away|revoke)\s+(.+?)(?:\s+access)?$/i);const on=x.match(/^(?:with|has|have|allow|enable|grant|give)\s+(.+?)(?:\s+access)?$/i);if(off)changes.push({permission:off[1].trim(),enabled:false});else if(on)changes.push({permission:on[1].trim(),enabled:true});else changes.push({permission:x.replace(/\s+access$/i,'').trim(),enabled:true});}return changes;}
 
 function cleanPlan(plan) {
   if (!plan || !Array.isArray(plan.steps)) return null;
@@ -100,6 +53,7 @@ function cleanPlan(plan) {
     source: String(s?.source || '').trim(), destination: String(s?.destination || '').trim(),
     role: String(s?.role || '').trim(), channel: String(s?.channel || '').trim(), parent: String(s?.parent || '').trim(), channelType: String(s?.channelType || 'text').trim().toLowerCase(), name: String(s?.name || '').trim().slice(0,100),
     permissionChanges: Array.isArray(s?.permissionChanges) ? s.permissionChanges.map(x => ({permission:String(x?.permission||'').trim(),enabled:Boolean(x?.enabled)})).filter(x=>x.permission).slice(0,30) : [],
+    createParentIfMissing:Boolean(s?.createParentIfMissing),
     reason: String(s?.reason || '').trim().slice(0,500), durationMs: Math.min(Math.max(Number(s?.durationMs)||600000,1000),28*24*60*60*1000),
   })).filter(s => s.action);
   return { summary:String(plan.summary||'').trim().slice(0,500), needsConfirmation:Boolean(plan.needsConfirmation)||steps.some(s=>HIGH_RISK.has(s.action)), steps };
@@ -169,11 +123,13 @@ async function runStep({message,step,config,saveConfig,dryRun=false}) {
     const existing=message.guild.channels.cache.find(c=>c.name.toLowerCase()===step.name.toLowerCase()); if(existing) return {ok:false,text:`Channel **${step.name}** already exists.`};
     const typeMap={text:ChannelType.GuildText,voice:ChannelType.GuildVoice,stage:ChannelType.GuildStageVoice,category:ChannelType.GuildCategory,announcement:ChannelType.GuildAnnouncement,forum:ChannelType.GuildForum};
     const type=typeMap[step.channelType]||ChannelType.GuildText;
-    const parent=step.parent?await resolveDestination(message.guild,step.parent,false):null;
+    let parent=step.parent?await resolveDestination(message.guild,step.parent,false).catch(()=>null):null; let parentEntry=null;
+    if(step.parent&&!parent&&step.createParentIfMissing){const existing=message.guild.channels.cache.find(c=>c.type===ChannelType.GuildCategory&&c.name.toLowerCase()===step.parent.toLowerCase());if(existing)parent=existing;else if(!dryRun){parent=await message.guild.channels.create({name:step.parent,type:ChannelType.GuildCategory,reason:'JARVIS: requested parent category'});parentEntry=journal.record(config,{action:'CHANNEL_CREATE',actorId:message.author.id,targetId:parent.id,reason:'Created requested parent category',before:null,after:{name:parent.name,type:parent.type,parentId:null},reversible:true,undo:{kind:'channel_delete',targetId:parent.id}});}else parent={name:step.parent,id:null};}
+    if(step.parent&&!parent)throw new Error(`I couldn't find category **${step.parent}**.`);
     if(dryRun) return {ok:true,simulated:true,text:`Would create ${step.channelType||'text'} channel **${step.name}**${parent?` under **${parent.name}**`:''}.`};
     const ch=await message.guild.channels.create({name:step.name,type,parent:parent?.id||undefined});
-    journal.record(config,{action:'CHANNEL_CREATE',actorId:message.author.id,targetId:ch.id,reason:step.reason,before:null,after:{name:ch.name,type:ch.type,parentId:ch.parentId},reversible:false}); saveConfig(message.guild.id,config);
-    return {ok:true,text:`Created ${step.channelType||'text'} channel **#${ch.name}**.`,channelId:ch.id};
+    const entry=journal.record(config,{action:'CHANNEL_CREATE',actorId:message.author.id,targetId:ch.id,reason:step.reason,before:null,after:{name:ch.name,type:ch.type,parentId:ch.parentId},reversible:true,undo:{kind:'channel_delete',targetId:ch.id}}); saveConfig(message.guild.id,config);
+    return {ok:true,text:`Created ${step.channelType||'text'} channel **#${ch.name}**.`,channelId:ch.id,case:entry,cases:[...(parentEntry?[parentEntry]:[]),entry]};
   }
   if (action==='channel_delete') {
     const ch=await resolveDestination(message.guild,step.channel,false); if(!ch.deletable) throw new Error(`Discord will not let me delete **${ch.name}**.`);
@@ -273,6 +229,7 @@ async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
   const raw=String(prompt||'').replace(/^jarvis\b[,:!\s-]*/i,'').trim();
   if(!raw) return {handled:false};
   const deterministicPlan=deterministicAgentPlan(raw);
+  if(deterministicPlan?.steps?.length===1&&deterministicPlan.steps[0].action==='undo'){const entry=journal.latest(config,e=>e.reversible&&e.status==='SUCCESS');if(!entry)return{handled:true,text:'I could not find a recent reversible JARVIS action, sir.'};const result=await undo({message,entry,config,saveConfig});return{handled:true,text:result.text};}
   const session=getSession(config,message.guild.id,message.author.id)||[]; const recentContext=session.slice(-10).map(x=>`${x.role==='model'?'JARVIS':'USER'}: ${String(x.text||'').slice(0,500)}`).join('\n'); const live=await awareness.snapshot(message.guild).catch(()=>null); const liveContext=live?`LIVE SERVER CONTEXT (reference only; do not invent beyond this):\n${awareness.format(live)}`:''; const knowledge=serverKnowledge.context(config,message.guild.id); const plannerPrompt=[liveContext,knowledge,recentContext?`RECENT CONVERSATION CONTEXT:\n${recentContext}`:'',`CURRENT REQUEST:\n${raw}`].filter(Boolean).join('\n\n'); const rawPlan=deterministicPlan||await parseAgentPlan({message,prompt:plannerPrompt});
   const validation=validatePlan(rawPlan,message.guild);
   if(!validation.ok){ return {handled:true,text:`I couldn't safely build that plan, sir.\n${validation.errors.slice(0,5).map(x=>`• ${x}`).join('\n')}`}; }

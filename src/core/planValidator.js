@@ -20,7 +20,7 @@ function cleanPlan(plan){
     targets: Array.isArray(s?.targets) ? s.targets.map(cleanRef).filter(Boolean).slice(0,MAX_TARGETS) : [],
     excludeTargets: Array.isArray(s?.excludeTargets) ? s.excludeTargets.map(cleanRef).filter(Boolean).slice(0,MAX_TARGETS) : [],
     source: cleanRef(s?.source), destination: cleanRef(s?.destination), role: cleanRef(s?.role),
-    channel: cleanRef(s?.channel), name: cleanRef(s?.name).slice(0,100), reason: cleanRef(s?.reason).slice(0,500),
+    channel: cleanRef(s?.channel), parent: cleanRef(s?.parent), channelType: cleanRef(s?.channelType || 'text').toLowerCase(), createParentIfMissing:Boolean(s?.createParentIfMissing), name: cleanRef(s?.name).slice(0,100), reason: cleanRef(s?.reason).slice(0,500),
     durationMs: Math.min(Math.max(Number(s?.durationMs)||600000,1000),28*24*60*60*1000),
     permissionChanges: Array.isArray(s?.permissionChanges) ? s.permissionChanges.map(x=>({permission:cleanRef(x?.permission),enabled:Boolean(x?.enabled)})).filter(x=>x.permission).slice(0,30) : []
   })).filter(s=>ACTIONS.has(s.action));

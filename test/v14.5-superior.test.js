@@ -20,3 +20,4 @@ test('V14.5 autopilot receives saveConfig dependency',()=>{
   const s=fs.readFileSync(path.join(__dirname,'..','src/systems/autopilot.js'),'utf8');
   assert.match(s,/function start\(client,\{getConfig,saveConfig,logEvent,recordKnowledge\}\)/);
 });
+

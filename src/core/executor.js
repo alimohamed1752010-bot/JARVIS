@@ -28,7 +28,7 @@ async function execute({message,action,target,destination,reason='',durationMs=1
       const before=targetRole.permissions.bitfield.toString(); await targetRole.setPermissions(next,`JARVIS V11: ${reason||'Owner-directed permission change'}`); const entry=journal.record(config,{action:'ROLE_PERMISSIONS',actorId:message.author.id,targetId:targetRole.id,reason,before:{permissions:before},after:{permissions:targetRole.permissions.bitfield.toString()},reversible:false}); saveConfig(guild.id,config); return {ok:true,text:`Updated **${targetRole.name}**: ${changed.join(', ')}.`,case:entry};
     }
     const memberRefs=Array.isArray(targets)?targets:[]; const results=[];
-    for(const ref of memberRefs){const mr=await resolveMember(guild,ref);if(mr.status!=='resolved'){results.push(`✗ ${ref}: ${mr.status==='ambiguous'?'ambiguous':'not found'}`);continue;} if(mr.member.id===bot.id){results.push(`✗ ${mr.member.displayName}: I will not change my own roles.`);continue;} if(mr.member.roles.highest.position>=bot.roles.highest.position){results.push(`✗ ${mr.member.displayName}: role hierarchy prevents this.`);continue;} try {if(action==='role_add')await mr.member.roles.add(targetRole,`JARVIS V11: ${reason||'Owner-directed role assignment'}`);else await mr.member.roles.remove(targetRole,`JARVIS V11: ${reason||'Owner-directed role removal'}`);results.push(`✓ ${mr.member.displayName}`);}catch(e){results.push(`✗ ${mr.member.displayName}: ${String(e.message||e).slice(0,120)}`);}}
+    for(const ref of memberRefs){const mr=await resolveMember(guild,ref);if(mr.status!=='resolved'){results.push(`✗ ${ref}: ${mr.status==='ambiguous'?'ambiguous':'not found'}`);continue;} if(mr.member.id===bot.id){results.push(`✗ ${mr.member.displayName}: I will not change my own roles.`);continue;} if(mr.member.roles.highest.position>=bot.roles.highest.position){results.push(`✗ ${mr.member.displayName}: role hierarchy prevents this.`);continue;} try {if(action==='role_add'){const had=mr.member.roles.cache.has(targetRole.id);await mr.member.roles.add(targetRole,`JARVIS V11: ${reason||'Owner-directed role assignment'}`);const entry=had?null:journal.record(config,{action:'ROLE_ADD',actorId:message.author.id,targetId:mr.member.id,roleId:targetRole.id,reason,before:{hadRole:false},after:{hadRole:true},reversible:true,undo:{kind:'role_remove',targetId:mr.member.id,roleId:targetRole.id}});results.push(`✓ ${mr.member.displayName}`);if(entry)results[results.length-1]+=` [case #${entry.id}]`;}else{const had=mr.member.roles.cache.has(targetRole.id);await mr.member.roles.remove(targetRole,`JARVIS V11: ${reason||'Owner-directed role removal'}`);const entry=had?journal.record(config,{action:'ROLE_REMOVE',actorId:message.author.id,targetId:mr.member.id,roleId:targetRole.id,reason,before:{hadRole:true},after:{hadRole:false},reversible:true,undo:{kind:'role_add',targetId:mr.member.id,roleId:targetRole.id}}):null;results.push(`✓ ${mr.member.displayName}`);if(entry)results[results.length-1]+=` [case #${entry.id}]`;}}catch(e){results.push(`✗ ${mr.member.displayName}: ${String(e.message||e).slice(0,120)}`);}}
     saveConfig(guild.id,config); return {ok:true,text:`${action==='role_add'?'Added':'Removed'} **${targetRole.name}** ${action==='role_add'?'to':'from'} ${results.length} target(s).\n${results.join('\n')}`};
   }
   const before={}; const after={};
@@ -61,19 +61,35 @@ async function execute({message,action,target,destination,reason='',durationMs=1
 }
 
 async function undo({message,entry,config,saveConfig}){
-  if(!entry?.reversible)return {ok:false,text:'That action cannot be reversed safely.'};
-  const guild=message.guild; const target=await guild.members.fetch(entry.targetId).catch(()=>null); if(!target)return {ok:false,text:'The original target is no longer in this server.'};
-  const bot=guild.members.me;
-  if(entry.action==='VOICEMOVE' && entry.before?.voiceChannelId){const ch=guild.channels.cache.get(entry.before.voiceChannelId);if(!ch)return {ok:false,text:'The previous voice channel no longer exists.'};return execute({message,action:'voicemove',target,destination:ch,reason:`Undo action #${entry.id}`,config,saveConfig});}
-  if(entry.action==='VOICEDISCONNECT')return {ok:false,text:"A voice disconnect cannot be safely undone because the previous channel may no longer represent the user's intent."};
-  if(entry.action==='VOICEMUTE')return execute({message,action:'voiceunmute',target,reason:`Undo action #${entry.id}`,config,saveConfig});
-  if(entry.action==='VOICEUNMUTE')return execute({message,action:'voicemute',target,reason:`Undo action #${entry.id}`,config,saveConfig});
-  if(entry.action==='TEXTMUTE')return execute({message,action:'textunmute',target,reason:`Undo action #${entry.id}`,config,saveConfig});
-  if(entry.action==='TEXTUNMUTE')return execute({message,action:'textmute',target,reason:`Undo action #${entry.id}`,config,saveConfig});
-  if(entry.action==='VOICEDEAFEN')return execute({message,action:'voiceundeafen',target,reason:`Undo action #${entry.id}`,config,saveConfig});
-  if(entry.action==='VOICEUNDEAFEN')return execute({message,action:'voicedeafen',target,reason:`Undo action #${entry.id}`,config,saveConfig});
-  if(entry.action==='TIMEOUT')return execute({message,action:'untimeout',target,reason:`Undo action #${entry.id}`,config,saveConfig});
-  if(entry.action==='UNTIMEOUT')return {ok:false,text:'Removing a timeout cannot restore its previous expiration safely.'};
-  return {ok:false,text:'No safe undo handler exists for that action.'};
+  if(!entry?.reversible||entry.status!=='SUCCESS')return{ok:false,text:'That action has already been undone or cannot be reversed safely.'};
+  const guild=message.guild;
+  const mark=()=>{entry.status='UNDONE';entry.undoneAt=new Date().toISOString();saveConfig(guild.id,config);};
+  const removeRole=async(member,role)=>{if(member&&role&&member.roles.cache.has(role.id))await member.roles.remove(role,'JARVIS: undo');};
+  if(entry.action==='PLAN_EXECUTION'){
+    const ids=Array.isArray(entry.metadata?.undoEntries)?entry.metadata.undoEntries:[];
+    const children=ids.map(id=>journal.get(config,id)).filter(Boolean).reverse();
+    const results=[];
+    for(const child of children){const r=await undo({message,entry:child,config,saveConfig});results.push(r);if(!r.ok)break;}
+    mark();
+    return{ok:results.every(r=>r.ok),text:`**JARVIS UNDO** ${results.filter(r=>r.ok).length}/${children.length} reversible step(s) undone.${results.some(r=>!r.ok)?`\n⚠ ${results.find(r=>!r.ok)?.text||'A step could not be undone.'}`:'\n✓ The previous JARVIS operation has been reversed.'}`};
+  }
+  if(entry.action==='ROLE_ADD'||entry.action==='ROLE_REMOVE'){
+    const target=await guild.members.fetch(entry.targetId).catch(()=>null);const role=guild.roles.cache.get(entry.roleId);if(!target||!role)return{ok:false,text:'The original member or role no longer exists.'};
+    if(entry.action==='ROLE_ADD')await removeRole(target,role);else if(!target.roles.cache.has(role.id))await target.roles.add(role,'JARVIS: undo');mark();return{ok:true,text:`Undid **${entry.action==='ROLE_ADD'?'role assignment':'role removal'}** for **${target.displayName}**.`};
+  }
+  if(entry.action==='ROLE_CREATE'){
+    const role=guild.roles.cache.get(entry.targetId);if(!role)return{ok:false,text:'The created role no longer exists.'};if(!role.deletable)return{ok:false,text:`Discord will not let me delete **${role.name}**.`};const name=role.name;await role.delete(`JARVIS: undo action #${entry.id}`);mark();return{ok:true,text:`Undid role creation **${name}**.`};
+  }
+  if(entry.action==='CHANNEL_CREATE'){
+    const ch=guild.channels.cache.get(entry.targetId);if(!ch)return{ok:false,text:'The created channel no longer exists.'};if(!ch.deletable)return{ok:false,text:`Discord will not let me delete **${ch.name}**.`};const name=ch.name;await ch.delete(`JARVIS: undo action #${entry.id}`);mark();return{ok:true,text:`Undid channel creation **#${name}**.`};
+  }
+  const target=await guild.members.fetch(entry.targetId).catch(()=>null);if(!target)return{ok:false,text:'The original target is no longer in this server.'};
+  if(entry.action==='VOICEMOVE'&&entry.before?.voiceChannelId){const ch=guild.channels.cache.get(entry.before.voiceChannelId);if(!ch)return{ok:false,text:'The previous voice channel no longer exists.'};const r=await execute({message,action:'voicemove',target,destination:ch,reason:`Undo action #${entry.id}`,config,saveConfig,skipJournal:true});if(r.ok)mark();return r;}
+  if(entry.action==='VOICEDISCONNECT')return{ok:false,text:'A voice disconnect cannot be safely undone.'};
+  const inverse={VOICEMUTE:'voiceunmute',VOICEUNMUTE:'voicemute',TEXTMUTE:'textunmute',TEXTUNMUTE:'textmute',VOICEDEAFEN:'voiceundeafen',VOICEUNDEAFEN:'voicedeafen',TIMEOUT:'untimeout'}[entry.action];
+  if(inverse){const r=await execute({message,action:inverse,target,reason:`Undo action #${entry.id}`,config,saveConfig,skipJournal:true});if(r.ok)mark();return r;}
+  if(entry.action==='UNTIMEOUT')return{ok:false,text:'Removing a timeout cannot restore its previous expiration safely.'};
+  return{ok:false,text:'No safe undo handler exists for that action.'};
 }
+
 module.exports={execute,undo};
