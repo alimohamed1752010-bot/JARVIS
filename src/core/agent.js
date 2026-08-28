@@ -17,6 +17,80 @@ const MAX_STEPS = 20;
 const MAX_AGENT_LOOPS = Math.min(Math.max(Number(process.env.JARVIS_AGENT_LOOPS || 2), 1), 4);
 const HIGH_RISK = new Set(['ban','kick','timeout','role_permissions','role_add','role_remove','channel_edit','channel_delete','role_delete','channel_create','role_create','member_nickname','channel_permissions','server_restore','autopilot','server_relationship']);
 
+
+// Deterministic safety-net for common multi-step administration requests.
+// The AI planner remains the primary natural-language planner, but a temporary
+// model failure must not turn a clearly structured request into "no valid plan".
+function deterministicAgentPlan(prompt) {
+  const raw = String(prompt || '').replace(/^jarvis\b[,:!\s-]*/i, '').trim();
+  if (!raw) return null;
+
+  // Example:
+  // "make a role named "...", with soundboard access, and then give it to Doctor Strange"
+  // This intentionally supports quoted role names so punctuation such as "..." is
+  // preserved exactly instead of being treated as missing data.
+  let m = raw.match(/^(?:make|create)\s+(?:a\s+)?role\s+named\s+["“](.+?)["”]\s*,?\s*(?:with|that\s+has)\s+(.+?)\s*(?:,?\s+and\s+then|\s+then)\s+(?:give|add)\s+(?:it|that\s+role|the\s+role)\s+to\s+(.+)$/i);
+  if (!m) {
+    m = raw.match(/^(?:make|create)\s+(?:a\s+)?role\s+named\s+["“](.+?)["”]\s*,?\s*(?:with|that\s+has)\s+(.+?)\s*(?:,?\s+and)\s+(?:give|add)\s+(?:it|that\s+role|the\s+role)\s+to\s+(.+)$/i);
+  }
+  if (m) {
+    const roleName = m[1].trim();
+    const permissionText = m[2].trim();
+    const targetText = m[3].trim();
+    const permissionChanges = [];
+    for (const part of permissionText.split(/\s*(?:,|and)\s*/i)) {
+      const x = part.trim();
+      if (!x) continue;
+      const off = x.match(/^(?:without|no|remove|deny|disable|take away|revoke)\s+(.+?)\s+access$/i);
+      const on = x.match(/^(?:with|has|have|allow|enable|grant|give)\s+(.+?)\s+access$/i);
+      if (off) permissionChanges.push({ permission: off[1].trim(), enabled: false });
+      else if (on) permissionChanges.push({ permission: on[1].trim(), enabled: true });
+      else if (/^soundboard(?:\s+access)?$/i.test(x)) permissionChanges.push({ permission: 'soundboard', enabled: true });
+      else permissionChanges.push({ permission: x.replace(/\s+access$/i, '').trim(), enabled: true });
+    }
+    if (roleName && targetText && permissionChanges.length) {
+      return {
+        summary: `Create role "${roleName}" with the requested permissions and assign it to ${targetText}.`,
+        needsConfirmation: true,
+        steps: [
+          {
+            action: 'role_create',
+            targets: [],
+            excludeTargets: [],
+            source: '',
+            destination: '',
+            role: '',
+            channel: '',
+            parent: '',
+            channelType: 'text',
+            name: roleName,
+            permissionChanges,
+            reason: 'Owner-directed role creation',
+            durationMs: 600000
+          },
+          {
+            action: 'role_add',
+            targets: [targetText],
+            excludeTargets: [],
+            source: '',
+            destination: '',
+            role: roleName,
+            channel: '',
+            parent: '',
+            channelType: 'text',
+            name: '',
+            permissionChanges: [],
+            reason: 'Owner-directed role assignment',
+            durationMs: 600000
+          }
+        ]
+      };
+    }
+  }
+
+  return null;
+}
+
 function cleanPlan(plan) {
   if (!plan || !Array.isArray(plan.steps)) return null;
   const steps = plan.steps.slice(0, MAX_STEPS).map((s) => ({
@@ -198,7 +272,8 @@ async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
   if(!isOwner) return {handled:false};
   const raw=String(prompt||'').replace(/^jarvis\b[,:!\s-]*/i,'').trim();
   if(!raw) return {handled:false};
-  const session=getSession(config,message.guild.id,message.author.id)||[]; const recentContext=session.slice(-10).map(x=>`${x.role==='model'?'JARVIS':'USER'}: ${String(x.text||'').slice(0,500)}`).join('\n'); const live=await awareness.snapshot(message.guild).catch(()=>null); const liveContext=live?`LIVE SERVER CONTEXT (reference only; do not invent beyond this):\n${awareness.format(live)}`:''; const knowledge=serverKnowledge.context(config,message.guild.id); const plannerPrompt=[liveContext,knowledge,recentContext?`RECENT CONVERSATION CONTEXT:\n${recentContext}`:'',`CURRENT REQUEST:\n${raw}`].filter(Boolean).join('\n\n'); const rawPlan=await parseAgentPlan({message,prompt:plannerPrompt});
+  const deterministicPlan=deterministicAgentPlan(raw);
+  const session=getSession(config,message.guild.id,message.author.id)||[]; const recentContext=session.slice(-10).map(x=>`${x.role==='model'?'JARVIS':'USER'}: ${String(x.text||'').slice(0,500)}`).join('\n'); const live=await awareness.snapshot(message.guild).catch(()=>null); const liveContext=live?`LIVE SERVER CONTEXT (reference only; do not invent beyond this):\n${awareness.format(live)}`:''; const knowledge=serverKnowledge.context(config,message.guild.id); const plannerPrompt=[liveContext,knowledge,recentContext?`RECENT CONVERSATION CONTEXT:\n${recentContext}`:'',`CURRENT REQUEST:\n${raw}`].filter(Boolean).join('\n\n'); const rawPlan=deterministicPlan||await parseAgentPlan({message,prompt:plannerPrompt});
   const validation=validatePlan(rawPlan,message.guild);
   if(!validation.ok){ return {handled:true,text:`I couldn't safely build that plan, sir.\n${validation.errors.slice(0,5).map(x=>`• ${x}`).join('\n')}`}; }
   const plan=validation.plan;
@@ -236,4 +311,4 @@ async function confirmPending({message,text,config,saveConfig}) {
   if(/^yes|confirm|do it/i.test(text)){config.v11.pendingPlans[key]=null;saveConfig(message.guild.id,config);if(!config.v12?.snapshots?.disabled) await snapshots.create(message.guild,config,saveConfig,{reason:pending.plan.summary||'Before confirmed JARVIS plan'});return executePlan({message,plan:pending.plan,config,saveConfig});}
   return null;
 }
-module.exports={runAgent,confirmPending,cleanPlan,executePlan};
+module.exports={runAgent,confirmPending,cleanPlan,executePlan,deterministicAgentPlan};
