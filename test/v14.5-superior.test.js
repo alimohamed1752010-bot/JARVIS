@@ -36,3 +36,32 @@ test('V14.5 planner parser tolerates a JSON preamble from the model',()=>{
   assert.match(source,/if \(!raw\.startsWith\('\{'\)\)/);
   assert.match(source,/lastIndexOf\('\}'\)/);
 });
+
+
+test('V14.5.4 permission normalizer accepts natural soundboard access wording',()=>{
+  const {normalizePermission}=require('../src/core/discordActionUtils');
+  assert.ok(normalizePermission('soundboard access perms'));
+  assert.ok(normalizePermission('use soundboard access'));
+});
+
+test('V14.5.4 deterministic role creation handles soundboard access and direct owner execution',()=>{
+  const {deterministicAgentPlan}=require('../src/core/agent');
+  const plan=deterministicAgentPlan('make the role named "labubu" with soundboard access perms and give it to seif');
+  assert.ok(plan);
+  assert.equal(plan.needsConfirmation,false);
+  assert.equal(plan.steps[0].action,'role_create');
+  assert.equal(plan.steps[0].permissionChanges[0].permission,'soundboard access perms');
+  assert.equal(plan.steps[1].action,'role_add');
+  assert.deepEqual(plan.steps[1].targets,['seif']);
+});
+
+test('V14.5.4 channel resolver normalizes punctuation and sec shorthand',()=>{
+  const {resolveChannel}=require('../src/core/resolver');
+  const guild={channels:{cache:new Map([
+    ['1',{id:'1',name:'secret 1',type:2}],
+    ['2',{id:'2',name:'general 2',type:2}]
+  ])}};
+  const r=resolveChannel(guild,'sec 1',{voiceOnly:false});
+  assert.equal(r.status,'resolved');
+  assert.equal(r.channel.id,'1');
+});

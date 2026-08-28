@@ -1,7 +1,7 @@
 const { ChannelType } = require('discord.js');
 
 function normalize(value='') {
-  return String(value).trim().replace(/^[@#]/, '').toLowerCase();
+  return String(value).trim().replace(/^[@#]/, '').toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 async function ensureMembers(guild) {
@@ -55,20 +55,26 @@ async function resolveMember(guild, query, { allowBots=true }={}) {
 }
 
 function channelVariants(value) {
-  const base=normalize(value).replace(/\s+/g,' ');
+  const base=normalize(value);
   const variants=new Set([base]);
   variants.add(base.replace(/\bgen\b/g,'general'));
-  variants.add(base.replace(/\bsec(?:ret)?\s+gen\b/g,'secret general'));
   variants.add(base.replace(/\bg\b/g,'general'));
-  return [...variants];
+  variants.add(base.replace(/\bsec\b/g,'secret'));
+  variants.add(base.replace(/\bcat\b/g,'category'));
+  variants.add(base.replace(/\bvc\b/g,'voice'));
+  variants.add(base.replace(/\bsec(?:ret)?\s+gen\b/g,'secret general'));
+  return [...variants].filter(Boolean);
 }
 
 function channelScore(channel, q) {
   const queries = channelVariants(q);
-  const name = channel.name.toLowerCase();
+  const name = normalize(channel.name);
   if (queries.includes(name)) return 1000;
   if (queries.some(query=>name.startsWith(query))) return 850;
   if (queries.some(query=>name.includes(query))) return 700;
+  const qTokens=normalize(q).split(' ').filter(Boolean);
+  const nTokens=name.split(' ').filter(Boolean);
+  if(qTokens.length && qTokens.every(qt=>nTokens.some(nt=>nt===qt || nt.startsWith(qt)))) return 650;
   return -1;
 }
 

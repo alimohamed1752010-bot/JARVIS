@@ -25,7 +25,7 @@ const PERMISSION_ALIASES = new Map([
 ]);
 
 function normalizePermission(value) {
-  const raw = String(value || '').trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+  const raw = String(value || '').trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').replace(/\b(?:access|permission|permissions|perm|perms)\b/g, '').replace(/\s+/g, ' ').trim();
   if (PERMISSION_ALIASES.has(raw)) return PERMISSION_ALIASES.get(raw);
   const key = Object.keys(PermissionsBitField.Flags).find(k => k.toLowerCase() === raw.replace(/\s+/g, ''));
   return key ? PermissionsBitField.Flags[key] : null;

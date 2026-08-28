@@ -1,6 +1,6 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "14.5.3",
+  "version": "14.5.4",
   "description": "JARVIS V14.5 Superior Relationship Intelligence & Autonomous Server Reasoning",
   "main": "src/index.js",
   "scripts": {
