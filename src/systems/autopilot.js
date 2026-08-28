@@ -1,0 +1,15 @@
+const windows=new Map();
+const permissionWindows=new Map();
+const reasoning=require('../core/reasoning');
+const serverKnowledge=require('../core/serverKnowledge');
+function start(client,{getConfig,saveConfig,logEvent,recordKnowledge}){
+  const enabled=g=>Boolean(getConfig(g.id).v12?.autopilot?.enabled);
+  const alert=async(guild,type,detail)=>{if(recordKnowledge)recordKnowledge(guild.id,{type,detail});await logEvent(guild,`🤖 **JARVIS AUTOPILOT ALERT**\n**${type}**\n${detail}\n\nNo destructive automatic action was taken.`);};
+  const observe=(guild,type,detail)=>{try{const cfg=getConfig(guild.id);serverKnowledge.recordEvent(cfg,guild.id,{action:`AUTOPILOT_${type.toUpperCase()}`,detail});reasoning.addTimeline(cfg,guild.id,{type,detail});if(recordKnowledge)recordKnowledge(guild.id,{type,detail});require('node:fs').mkdirSync(require('node:path').dirname(require('node:path').join(__dirname,'..','..','data',`${guild.id}.json`)),{recursive:true});saveConfig(guild.id,cfg);const c=reasoning.correlate(cfg,guild.id);if(c.signals.length) logEvent(guild,`🧠 **JARVIS CORRELATED THREAT SIGNAL**\n${c.signals.slice(0,3).map(x=>`• **${x.title}** — ${x.evidence}`).join('\n')}\n\n**Recommendation:** ${c.signals[0].recommendation}`).catch(()=>{});}catch(e){console.error('[AUTOPILOT OBSERVE]',e);}};
+  client.on('guildMemberAdd',async member=>{if(!enabled(member.guild))return;const now=Date.now(),key=member.guild.id;const list=(windows.get(key)||[]).filter(t=>now-t<30000);list.push(now);windows.set(key,list);observe(member.guild,'member_join',`Member joined: ${member.user.tag}`);if(list.length>=8){await alert(member.guild,'Join burst',`${list.length} members joined within 30 seconds.`);windows.set(key,[]);}});
+  client.on('channelDelete',async channel=>{if(channel.guild&&enabled(channel.guild)){observe(channel.guild,'channel_delete',`Channel deleted: ${channel.name}`);await alert(channel.guild,'Channel deleted',`Channel **${channel.name}** was deleted.`);}});
+  client.on('roleDelete',async role=>{if(role.guild&&enabled(role.guild)){observe(role.guild,'role_delete',`Role deleted: ${role.name}`);await alert(role.guild,'Role deleted',`Role **${role.name}** was deleted.`);}});
+  client.on('guildBanAdd',async ban=>{if(ban.guild&&enabled(ban.guild)){observe(ban.guild,'ban',`Banned: ${ban.user.tag}`);await alert(ban.guild,'Ban detected',`**${ban.user.tag}** was banned. Review the audit log before taking further action.`);}});
+  client.on('roleUpdate',async(oldRole,newRole)=>{if(!newRole.guild||!enabled(newRole.guild))return;const before=oldRole.permissions.bitfield.toString(),after=newRole.permissions.bitfield.toString();if(before!==after){const key=newRole.guild.id;const now=Date.now();const list=(permissionWindows.get(key)||[]).filter(t=>now-t<60000);list.push(now);permissionWindows.set(key,list);observe(newRole.guild,'role_permission_change',`Role permission change: ${newRole.name}`);if(list.length>=3)await alert(newRole.guild,'Rapid permission changes',`${list.length} role permission changes were observed within 60 seconds. Review the audit log.`);}});
+}
+module.exports={start};
