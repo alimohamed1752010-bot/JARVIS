@@ -1,7 +1,11 @@
 function safeMath(input) {
   const raw = String(input || '').trim().replace(/,/g, '');
+  // Strip common natural-language wrappers while preserving the actual
+  // arithmetic expression. This is intentionally deterministic so phrases
+  // such as "how about 6x6x6" cannot fall through to the conversational AI.
   const expression = raw
-    .replace(/^(?:what(?:'s|s)?\s+(?:is\s+)?|calculate\s+|compute\s+)/i, '')
+    .replace(/^(?:(?:what(?:'s|s)?|whats|what)\s+(?:is\s+)?|calculate\s+|compute\s+|how\s+about\s+|how\s+much\s+is\s+)/i, '')
+    .replace(/^(?:please\s+)?(?:calculate|compute)\s+(?:the\s+)?/i, '')
     .trim();
   if (!expression) return null;
 

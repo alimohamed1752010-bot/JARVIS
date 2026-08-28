@@ -51,7 +51,7 @@ const reminders = new Map();
 // the user to repeat the entire command.
 const pendingVoiceMoves = new Map();
 const { conversationalReply, conversationalReplyDM, clearMemory, getAIStatus, summarizeSession, parseVoiceMoveIntent } = require("./ai");
-const { ensureV8, getSession, clearSession, usageSnapshot, healthSnapshot } = require("./v8/core");
+const { ensureV8, getSession, pushSession, clearSession, usageSnapshot, healthSnapshot } = require("./v8/core");
 const voice = require("./v8/voice");
 const { addFact, getFacts, clearFacts } = require("./ai/memory");
 const discordTools = require("./tools/discordTools");
@@ -593,6 +593,30 @@ function isOwnerTarget(message) {
 function getDisplayName(user) {
   return user?.globalName || user?.displayName || user?.username || user?.tag || (user?.id ? `User ${user.id}` : "there");
 }
+
+function rememberDirectReplyTurn(message, userText, jarvisText) {
+  if (!message?.guild || !message?.author?.id) return;
+  const config = getConfig(message.guild.id);
+  ensureV8(config);
+  const user = String(userText || '').trim();
+  const model = String(jarvisText || '').trim();
+  if (!user || !model) return;
+  // Server replies are first-class conversation turns. This is deliberately
+  // separate from the calculator/agent execution so every direct reply is
+  // available to the next natural-language request ("how about...",
+  // "do that one instead", "what about him?", etc.).
+  pushSession(config, message.guild.id, message.author.id, 'user', user);
+  pushSession(config, message.guild.id, message.author.id, 'model', model);
+  config.ai.memory ??= {};
+  config.ai.memory[message.guild.id] ??= {};
+  config.ai.memory[message.guild.id][message.author.id] ??= [];
+  const memory = config.ai.memory[message.guild.id][message.author.id];
+  const now = new Date().toISOString();
+  memory.push({role:'user', text:user.slice(0,4000), at:now}, {role:'model', text:model.slice(0,4000), at:now});
+  while (memory.length > 60) memory.shift();
+  saveConfig(message.guild.id, config);
+}
+
 
 async function generateRoast(message, prompt) {
   const config = getConfig(message.guild.id);
@@ -4609,6 +4633,18 @@ client.on(
         try {
           await message.channel.sendTyping().catch(() => {});
 
+          // Deterministic calculator must run before the AI/agent pipeline.
+          // A reply to JARVIS is already an invocation, so a simple question
+          // such as "how about 6x6x6" must be answered as math rather than
+          // being interpreted as a conversational/cube-related request.
+          const directReplyMath = safeMath(rawContent);
+          if (directReplyMath !== null) {
+            const mathReply = `**${directReplyMath}, sir.**`;
+            await message.reply(mathReply);
+            rememberDirectReplyTurn(message, rawContent, mathReply);
+            return;
+          }
+
           // A direct reply behaves like a normal owner JARVIS request, but
           // without requiring the word "jarvis". The V11 agent gets first
           // chance so natural-language server actions work exactly like
@@ -4637,7 +4673,9 @@ client.on(
               saveConfig
             });
             if (agent?.handled) {
-              await message.reply(agent.text || "Done, sir.");
+              const agentReply = agent.text || "Done, sir.";
+              await message.reply(agentReply);
+              rememberDirectReplyTurn(message, rawContent, agentReply);
               return;
             }
           } catch (error) {
