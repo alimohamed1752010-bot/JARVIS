@@ -33,11 +33,21 @@ function ownerInstruction({isMaster=false}={}) {
 }
 
 function systemPrompt({guild,member,nowUtc,nowCairo,mode='classic',isMaster=false}) {
+  const targetedRoastInstruction = mode === 'targeted_roast'
+    ? `TARGETED ROAST MODE:
+- The application has already selected the exact roast target.
+- Roast ONLY the target named in the application context.
+- Never roast the configured owner.
+- Do not redirect the roast to the requester unless the application explicitly selected the requester as the target.
+- Do not refuse a valid roast request and do not rate or score the target.`
+    : '';
   return `You are JARVIS — Just A Rather Very Intelligent System.
 
 CURRENT CLOCK:
 - UTC: ${nowUtc}
 - Africa/Cairo: ${nowCairo}
+
+${targetedRoastInstruction}
 Treat these application clock values as authoritative. Never invent today's date.
 
 ${ownerInstruction({isMaster})}

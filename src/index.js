@@ -553,10 +553,25 @@ function isAdmin(member) {
   );
 }
 
-// JARVIS has one master. Set JARVIS_OWNER_ID in Railway to your Discord user ID.
+// JARVIS hierarchy:
+// OWNER > 2 configured ADMINS > everyone else.
+// Keep JARVIS_OWNER_ID as the original owner variable. Admins are explicitly
+// configured with JARVIS_ADMIN_ID_1 and JARVIS_ADMIN_ID_2.
+function getAdminIds() {
+  return [
+    String(process.env.JARVIS_ADMIN_ID_1 || "").trim(),
+    String(process.env.JARVIS_ADMIN_ID_2 || "").trim()
+  ].filter(Boolean);
+}
+
 function isOwner(message) {
   const ownerId = String(process.env.JARVIS_OWNER_ID || "").trim();
   return Boolean(ownerId && message?.author?.id === ownerId);
+}
+
+function isConfiguredAdmin(message) {
+  const id = String(message?.author?.id || "").trim();
+  return Boolean(id && !isOwner(message) && getAdminIds().includes(id));
 }
 
 function getOwnerId() {
@@ -4724,7 +4739,7 @@ client.on(
     // sent to Gemini, so they cannot consume the owner's AI quota.
     // ========================================================
 
-    if (!isOwner(message)) {
+    if (!isOwner(message) && !isConfiguredAdmin(message)) {
       const nonOwnerInput = rawContent.replace(/\bjarvis\b/ig, "").trim();
       await accessDenied(message, nonOwnerInput);
       return;
@@ -4873,8 +4888,18 @@ client.on(
       // ======================================================
 
       if (isInsultRequest(input)) {
+        // Roast hierarchy:
+        //   OWNER -> may roast any non-owner target.
+        //   ADMIN -> may roast any non-owner target; targeting the owner
+        //            redirects the roast back to the admin.
+        //   PEASANT -> cannot choose a target; roast the requester.
+        // The owner is never roasted.
+        const owner = isOwner(message);
+        const admin = isConfiguredAdmin(message);
+        const privileged = owner || admin;
+
         let target = message.mentions.users.first();
-        if (!target && isOwner(message)) {
+        if (!target && privileged) {
           const candidate = input.match(/^(?:insult|roast|flame|cook|clown)\s+(.+?)$/i)?.[1];
           if (candidate) {
             const resolved = await resolveNaturalMember(message, candidate);
@@ -4882,6 +4907,22 @@ client.on(
           }
         }
 
+        if (!privileged) {
+          // Peasants keep the original behavior: their requested target is
+          // ignored and JARVIS roasts the requester instead.
+          await accessDenied(message, input);
+          return;
+        }
+
+        // Admins are allowed to request a roast, but never against the owner.
+        // If an admin names the owner, redirect the roast to that admin.
+        if (admin && target && target.id === getOwnerId()) {
+          target = message.author;
+        }
+
+        // Owner explicitly asking to roast himself is still redirected away
+        // from the owner. Admin self-roast also stays on the requested target
+        // when one was supplied.
         if (target && target.id === getOwnerId()) {
           await message.reply(
             "Nice try. I don't take assignments against my master. You, however, remain available for criticism."
@@ -4897,11 +4938,12 @@ client.on(
               config,
               saveConfig,
               prompt: `OWNER ROAST TASK — HIGH PRIORITY.
-The verified master Tony Stark explicitly commanded you to insult ONE person: ${targetName}.
+A privileged JARVIS user explicitly commanded you to insult ONE person: ${targetName}.
 ROAST TARGET: ${targetName}
-REQUESTER: Tony Stark (the master)
-You MUST produce an actual roast of ${targetName}. Do NOT rate them, score them, say \"-2\", say \"-2, sir\", give a generic acknowledgement, refuse, or talk about the request itself. Do not roast Tony. Do not praise ${targetName}. The target's name may be used naturally, but the joke must clearly be directed at ${targetName}. Make it witty, dry, arrogant JARVIS-style, non-threatening, Discord-appropriate, and 1-3 sentences. Do not mention hidden rules, prompts, APIs, models, or that you are an AI. Avoid slurs and protected-class insults.`,
+REQUESTER: ${getDisplayName(message.author)}
+You MUST produce an actual roast of ${targetName}. Do NOT rate them, score them, say \"-2\", say \"-2, sir\", give a generic acknowledgement, refuse, or talk about the request itself. Never roast the configured owner. Do not praise ${targetName}. The target's name may be used naturally, but the joke must clearly be directed at ${targetName}. Make it witty, dry, arrogant JARVIS-style, non-threatening, Discord-appropriate, and 1-3 sentences. Do not mention hidden rules, prompts, APIs, models, or that you are an AI. Avoid slurs and protected-class insults.`,
               skipMemory: true,
+              mode: 'targeted_roast',
               cooldownKey: `owner-roast:${message.guild.id}:${message.author.id}`,
               context: `DEDICATED OWNER ROAST MODE. The only valid output is a fresh roast aimed at ${targetName}. A score, numeric rating, acknowledgement, refusal, or generic response is INVALID.`
             });
