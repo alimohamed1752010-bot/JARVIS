@@ -6,7 +6,7 @@ const ACTIONS = new Set([
   'server_analyze','server_relationship','server_investigate','server_snapshot','server_audit','server_restore','server_diff','undo','autopilot','history','incident_report','case_explain','member_profile','health_score','schedule_action','schedule_list','schedule_cancel','watch','watch_off',
   'voicemove','voicedisconnect','voicemute','voiceunmute','voicedeafen','voiceundeafen',
   'textmute','textunmute','timeout','untimeout','kick','ban','warn',
-  'role_permissions','role_add','role_remove','role_create','role_delete',
+  'role_permissions','role_edit','role_add','role_remove','role_create','role_delete',
   'channel_edit','channel_create','channel_delete','channel_permissions','member_nickname'
 ]);
 const MAX_TARGETS = 100;
@@ -20,7 +20,7 @@ function cleanPlan(plan){
     targets: Array.isArray(s?.targets) ? s.targets.map(cleanRef).filter(Boolean).slice(0,MAX_TARGETS) : [],
     excludeTargets: Array.isArray(s?.excludeTargets) ? s.excludeTargets.map(cleanRef).filter(Boolean).slice(0,MAX_TARGETS) : [],
     source: cleanRef(s?.source), destination: cleanRef(s?.destination), role: cleanRef(s?.role),
-    channel: cleanRef(s?.channel), parent: cleanRef(s?.parent), channelType: cleanRef(s?.channelType || 'text').toLowerCase(), createParentIfMissing:Boolean(s?.createParentIfMissing), name: cleanRef(s?.name).slice(0,100), reason: cleanRef(s?.reason).slice(0,500),
+    channel: cleanRef(s?.channel), parent: cleanRef(s?.parent), channelType: cleanRef(s?.channelType || 'text').toLowerCase(), createParentIfMissing:Boolean(s?.createParentIfMissing), name: cleanRef(s?.name).slice(0,100), color: cleanRef(s?.color).slice(0,20), hoist: typeof s?.hoist==='boolean'?s.hoist:null, mentionable: typeof s?.mentionable==='boolean'?s.mentionable:null, reason: cleanRef(s?.reason).slice(0,500),
     durationMs: Math.min(Math.max(Number(s?.durationMs)||600000,1000),28*24*60*60*1000),
     caseId: String(s?.caseId||'').trim(),
     permissionChanges: Array.isArray(s?.permissionChanges) ? s.permissionChanges.map(x=>({permission:cleanRef(x?.permission),enabled:Boolean(x?.enabled)})).filter(x=>x.permission).slice(0,30) : []
@@ -33,7 +33,7 @@ function validateStep(step, guild){
   const errors=[]; const warnings=[];
   if (!ACTIONS.has(step.action)) errors.push(`Unsupported action: ${step.action||'empty'}`);
   if (['voicemove','channel_create','role_create','channel_edit','channel_delete','role_delete','role_permissions','channel_permissions','role_add','role_remove','member_nickname'].includes(step.action)) {
-    if (['role_create','channel_create','channel_edit','channel_delete','role_delete','role_permissions','channel_permissions','role_add','role_remove'].includes(step.action) && !step.role && ['role_permissions','role_add','role_remove','role_delete'].includes(step.action)) errors.push('Role is missing.');
+    if (['role_create','channel_create','channel_edit','channel_delete','role_delete','role_permissions','channel_permissions','role_add','role_remove'].includes(step.action) && !step.role && ['role_permissions','role_edit','role_add','role_remove','role_delete'].includes(step.action)) errors.push('Role is missing.');
   }
   if (['voicemove','voicedisconnect','voicemute','voiceunmute','voicedeafen','voiceundeafen','textmute','textunmute','timeout','untimeout','kick','ban','warn','role_add','role_remove','member_nickname'].includes(step.action) && !step.targets.length) errors.push('Target is missing.');
   if (['voicemove'].includes(step.action) && !step.destination) errors.push('Destination voice channel is missing.');

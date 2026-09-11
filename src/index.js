@@ -4661,18 +4661,9 @@ client.on(
         try {
           await message.channel.sendTyping().catch(() => {});
 
-          // Deterministic calculator must run before the AI/agent pipeline.
-          // A reply to JARVIS is already an invocation, so a simple question
-          // such as "how about 6x6x6" must be answered as math rather than
-          // being interpreted as a conversational/cube-related request.
-          const directReplyMath = safeMath(rawContent);
-          if (directReplyMath !== null) {
-            const mathReply = `**${directReplyMath}, sir.**`;
-            await message.reply(mathReply);
-            rememberDirectReplyTurn(message, rawContent, mathReply);
-            return;
-          }
-
+          // AI-FIRST: a direct reply is routed through the same AI planner and
+          // conversational brain as every other JARVIS request. Deterministic
+          // handlers (including math) are fallback-only.
           // A direct reply behaves like a normal owner JARVIS request, but
           // without requiring the word "jarvis". The V11 agent gets first
           // chance so natural-language server actions work exactly like
@@ -4721,6 +4712,17 @@ client.on(
 
           if (reply) {
             await message.reply(reply.slice(0, 1900));
+            return;
+          }
+
+          // Last-resort legacy calculator fallback. AI has already had the
+          // opportunity to understand the request.
+          const directReplyMath = safeMath(rawContent);
+          if (directReplyMath !== null) {
+            const mathReply = `**${directReplyMath}, sir.**`;
+            await message.reply(mathReply);
+            rememberDirectReplyTurn(message, rawContent, mathReply);
+            return;
           }
         } catch (error) {
           console.error('[V14.5.7 SERVER REPLY TRIGGER]', error);
@@ -4758,6 +4760,47 @@ client.on(
       return;
     }
 
+    // ========================================================
+    // V15.1 AI-FIRST UNIVERSAL ROUTER
+    // Every invocation reaches the AI planner before legacy commands,
+    // greetings, calculator shortcuts, roast handlers, or regex parsers.
+    // If AI cannot produce an executable Discord plan, the existing systems
+    // remain available as fallbacks below.
+    // ========================================================
+    const universalPrompt = rawContent.replace(/\bjarvis\b/ig, '').trim();
+    let aiFirstHandled = false;
+    if (universalPrompt) {
+      try {
+        const agent = await runAgent({message, prompt:universalPrompt, config, saveConfig});
+        if (agent?.handled) {
+          aiFirstHandled = true;
+          await message.reply(agent.text || 'Done, sir.');
+          return;
+        }
+      } catch (error) {
+        console.error('[V15.1 AI-FIRST AGENT]', error);
+      }
+    }
+
+    // If the planner correctly decided this is conversation rather than a
+    // Discord action, let the conversational AI answer BEFORE any hardcoded
+    // response. Legacy command/greeting systems only get used when AI cannot
+    // answer or when an exact legacy command is being invoked.
+    const legacyCommandName = universalPrompt.split(/\s+/)[0]?.toLowerCase();
+    const hasLegacyCommand = Boolean(legacyCommandName && textCommands[legacyCommandName]);
+    if (!aiFirstHandled && universalPrompt && !hasLegacyCommand) {
+      try {
+        const aiReply = await conversationalReply({
+          message, config, saveConfig, prompt:universalPrompt,
+          mode:config.ai?.personality || 'classic',
+          context:`AI-FIRST JARVIS ROUTER. Understand the user's request before answering. If it is informational, conversational, emotional, creative, or a general question, answer it naturally. If it requires a Discord server action, it should have been handled by the AI action planner already. Live Discord context: server=${message.guild.name}; members=${message.guild.memberCount}; channel=#${message.channel.name}.`
+        });
+        if (aiReply) { await message.reply({content:aiReply.slice(0,1900)}); return; }
+      } catch (error) {
+        console.error('[V15.1 AI-FIRST CONVERSATION]', error);
+      }
+    }
+
     // V10: text is the only input. If TTS is connected, every JARVIS text reply is also spoken.
     const activeVoiceConnection = voice.getConnection(message.guild.id) || message.guild.__jarvisVoiceConnection;
     if (activeVoiceConnection && voice.status(message.guild.id).ttsEnabled) {
@@ -4773,23 +4816,8 @@ client.on(
       };
     }
 
-    // ========================================================
-    // V11 SUPERIOR AGENT ENGINE
-    // Natural-language planning + safe Discord tools + verification.
-    // ========================================================
-    if (lower.startsWith("jarvis")) {
-      const v11Input = rawContent.slice(6).trim();
-      if (v11Input) {
-        try {
-          const confirmed = await confirmV11Plan({message,text:v11Input,config,saveConfig});
-          if (confirmed?.handled) { await message.reply(confirmed.text || "Done, sir."); return; }
-          const agent = await runAgent({message,prompt:v11Input,config,saveConfig});
-          if (agent?.handled) { await message.reply(agent.text || "Done, sir."); return; }
-        } catch (error) {
-          console.error("[V11 AGENT]", error);
-        }
-      }
-    }
+    // V11 agent already ran in the universal AI-first router above.
+    // The legacy V9 router remains below as an emergency fallback.
 
     // ========================================================
     // V9 INTELLIGENT COMMAND ROUTER

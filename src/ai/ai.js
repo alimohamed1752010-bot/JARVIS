@@ -205,7 +205,7 @@ USER REQUEST: ${String(prompt||'').slice(0,1400)}`;
     const raw=String(result.text||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
     const parsed=JSON.parse(raw);
     if(!parsed || typeof parsed.action!=='string') return null;
-    return {action:parsed.action,targets:Array.isArray(parsed.targets)?parsed.targets.map(x=>String(x).trim()).filter(Boolean).slice(0,20):[],excludeTargets:Array.isArray(parsed.excludeTargets)?parsed.excludeTargets.map(x=>String(x).trim()).filter(Boolean).slice(0,20):[],source:String(parsed.source||'').trim(),destination:String(parsed.destination||'').trim(),reason:String(parsed.reason||'').trim().slice(0,500),durationMs:Math.min(Math.max(Number(parsed.durationMs)||600000,1000),28*24*60*60*1000),caseId:parsed.caseId??null,raw:String(parsed.raw||prompt).slice(0,1400),role:String(parsed.role||'').trim(),permissionChanges:Array.isArray(parsed.permissionChanges)?parsed.permissionChanges.map(x=>({permission:String(x?.permission||'').trim(),enabled:Boolean(x?.enabled)})).filter(x=>x.permission).slice(0,20):[],channel:String(parsed.channel||'').trim(),name:String(parsed.name||'').trim().slice(0,100)};
+    return {action:parsed.action,targets:Array.isArray(parsed.targets)?parsed.targets.map(x=>String(x).trim()).filter(Boolean).slice(0,20):[],excludeTargets:Array.isArray(parsed.excludeTargets)?parsed.excludeTargets.map(x=>String(x).trim()).filter(Boolean).slice(0,20):[],source:String(parsed.source||'').trim(),destination:String(parsed.destination||'').trim(),reason:String(parsed.reason||'').trim().slice(0,500),durationMs:Math.min(Math.max(Number(parsed.durationMs)||600000,1000),28*24*60*60*1000),caseId:parsed.caseId??null,raw:String(parsed.raw||prompt).slice(0,1400),role:String(parsed.role||'').trim(),permissionChanges:Array.isArray(parsed.permissionChanges)?parsed.permissionChanges.map(x=>({permission:String(x?.permission||'').trim(),enabled:Boolean(x?.enabled)})).filter(x=>x.permission).slice(0,20):[],channel:String(parsed.channel||'').trim(),name:String(parsed.name||'').trim().slice(0,100),color:String(parsed.color||'').trim().slice(0,20),hoist:typeof parsed.hoist==='boolean'?parsed.hoist:null,mentionable:typeof parsed.mentionable==='boolean'?parsed.mentionable:null,parent:String(parsed.parent||'').trim(),channelType:String(parsed.channelType||'').trim().toLowerCase()};
   } catch(error) {
     console.warn('[AI COMMAND ROUTER] Falling back to deterministic parser:',error?.message||error);
     return null;
@@ -217,7 +217,7 @@ async function parseAgentPlan({message,prompt}) {
   const status=getAIStatus();
   if(!status.enabled || !status.configured) return null;
   const instruction=`You are JARVIS V13.5 SUPERIOR SERVER AGENT PLANNER. Convert the user's natural-language Discord administration request into a safe JSON execution plan. NEVER execute anything. Return JSON only.
-Schema: {"summary":"short summary","needsConfirmation":false,"steps":[{"action":"voicemove|voicedisconnect|voicemute|voiceunmute|voicedeafen|voiceundeafen|textmute|textunmute|timeout|untimeout|kick|ban|warn|role_permissions|role_add|role_remove|channel_edit|channel_create|channel_delete|role_create|role_delete|member_nickname|channel_permissions|server_analyze|server_relationship|server_investigate|server_snapshot|server_audit|server_restore|server_diff|undo|autopilot","targets":[],"excludeTargets":[],"source":"","destination":"","role":"","channel":"","parent":"","channelType":"text","name":"","permissionChanges":[],"reason":"","durationMs":600000}]}
+Schema: {"summary":"short summary","needsConfirmation":false,"steps":[{"action":"voicemove|voicedisconnect|voicemute|voiceunmute|voicedeafen|voiceundeafen|textmute|textunmute|timeout|untimeout|kick|ban|warn|role_permissions|role_add|role_remove|role_edit|channel_edit|channel_create|channel_delete|role_create|role_delete|member_nickname|channel_permissions|server_analyze|server_relationship|server_investigate|server_snapshot|server_audit|server_restore|server_diff|undo|autopilot","targets":[],"excludeTargets":[],"source":"","destination":"","role":"","channel":"","parent":"","channelType":"text","name":"","color":"","hoist":false,"mentionable":false,"permissionChanges":[],"reason":"","durationMs":600000}]}
 Rules:
 - Understand casual natural language, shorthand, typos, and multi-step requests.
 - Preserve exact names and mentions; never invent IDs or entities.
@@ -237,7 +237,9 @@ Rules:
 - 'keep an eye on the server/enable autopilot' may use action=autopilot with name='on' or 'off'.
 - For channel creation, infer channelType from words like category, voice, stage, forum, announcement; default to text.
 - For channel creation, parent may contain an existing category name.
-- For role creation, permissionChanges may describe permissions to enable.
+- For role creation/editing, permissionChanges may describe permissions to enable/disable. Role edits may also use name/color/hoist/mentionable.
+- Role color should be emitted as a CSS hex string in color when requested; preserve role name if it is not being changed.
+- Channel permission changes may target a role mention/name, a member mention/name, or @everyone. Never invent an entity.
 - If the user asks to compare the server with a snapshot, use server_analyze and explainable fields only; do not invent data.
 - Never output code, markdown, explanations, or IDs.
 USER REQUEST: ${String(prompt||'').slice(0,3000)}`;

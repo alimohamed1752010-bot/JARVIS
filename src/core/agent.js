@@ -15,7 +15,7 @@ const { validatePlan, summarize: summarizePlan } = require('./planValidator');
 
 const MAX_STEPS = 20;
 const MAX_AGENT_LOOPS = Math.min(Math.max(Number(process.env.JARVIS_AGENT_LOOPS || 2), 1), 4);
-const HIGH_RISK = new Set(['ban','kick','timeout','role_permissions','role_add','role_remove','channel_edit','channel_delete','role_delete','channel_create','role_create','member_nickname','channel_permissions','server_restore','autopilot','server_relationship']);
+const HIGH_RISK = new Set(['ban','kick','timeout','role_permissions','role_edit','role_add','role_remove','channel_edit','channel_delete','role_delete','channel_create','role_create','member_nickname','channel_permissions','server_restore','autopilot','server_relationship']);
 
 
 const { CREATOR_ID } = require('./identity');
@@ -72,7 +72,7 @@ function cleanPlan(plan) {
     targets: Array.isArray(s?.targets) ? s.targets.map(String).map(x => x.trim()).filter(Boolean).slice(0, 50) : [],
     excludeTargets: Array.isArray(s?.excludeTargets) ? s.excludeTargets.map(String).map(x => x.trim()).filter(Boolean).slice(0, 50) : [],
     source: String(s?.source || '').trim(), destination: String(s?.destination || '').trim(),
-    role: String(s?.role || '').trim(), channel: String(s?.channel || '').trim(), parent: String(s?.parent || '').trim(), channelType: String(s?.channelType || 'text').trim().toLowerCase(), name: String(s?.name || '').trim().slice(0,100),
+    role: String(s?.role || '').trim(), channel: String(s?.channel || '').trim(), parent: String(s?.parent || '').trim(), channelType: String(s?.channelType || 'text').trim().toLowerCase(), name: String(s?.name || '').trim().slice(0,100), color: String(s?.color || '').trim().slice(0,20), hoist: typeof s?.hoist==='boolean'?s.hoist:null, mentionable: typeof s?.mentionable==='boolean'?s.mentionable:null,
     permissionChanges: Array.isArray(s?.permissionChanges) ? s.permissionChanges.map(x => ({permission:String(x?.permission||'').trim(),enabled:Boolean(x?.enabled)})).filter(x=>x.permission).slice(0,30) : [],
     caseId: String(s?.caseId || '').trim(),
     createParentIfMissing:Boolean(s?.createParentIfMissing),
@@ -185,10 +185,14 @@ async function runStep({message,step,config,saveConfig,dryRun=false}) {
   }
   if (action==='channel_permissions') {
     const ch=await resolveDestination(message.guild,step.channel,false); if(!ch.manageable) throw new Error(`Discord will not let me edit **${ch.name}**.`);
-    const rr=resolveRole(message.guild,step.role); if(rr.status!=='resolved') throw new Error(`I couldn't uniquely resolve role **${step.role}**.`);
+    const ref=String(step.role||'').trim();
+    let overwriteTarget=null;
+    if(/^@?everyone$/i.test(ref)) overwriteTarget=message.guild.roles.everyone;
+    else { const rr=resolveRole(message.guild,ref); if(rr.status==='resolved') overwriteTarget=rr.role; else { const mr=await resolveMember(message.guild,ref); if(mr.status==='resolved') overwriteTarget=mr.member; } }
+    if(!overwriteTarget) throw new Error(`I couldn't uniquely resolve permission target **${ref}**.`);
     const overwrites=step.permissionChanges.map(c=>[normalizePermission(c.permission),c.enabled]); if(overwrites.some(([f])=>!f)) throw new Error('One or more permissions are unknown.');
-    if(dryRun) return {ok:true,simulated:true,text:`Would update **#${ch.name}** permissions for **${rr.role.name}**.`};
-    const allow=overwrites.filter(([,e])=>e).map(([f])=>f),deny=overwrites.filter(([,e])=>!e).map(([f])=>f); await ch.permissionOverwrites.edit(rr.role,{allow,deny}, step.reason||'JARVIS V11'); return {ok:true,text:`Updated **#${ch.name}** permissions for **${rr.role.name}**.`};
+    if(dryRun) return {ok:true,simulated:true,text:`Would update **#${ch.name}** permissions for **${overwriteTarget.name || overwriteTarget.user?.tag || 'target'}**.`};
+    const allow=overwrites.filter(([,e])=>e).map(([f])=>f),deny=overwrites.filter(([,e])=>!e).map(([f])=>f); await ch.permissionOverwrites.edit(overwriteTarget,{allow,deny}, step.reason||'JARVIS AI'); return {ok:true,text:`Updated **#${ch.name}** permissions for **${overwriteTarget.name || overwriteTarget.user?.tag || 'target'}**.`};
   }
   throw new Error(`Unsupported agent action: ${action}`);
 }
@@ -206,6 +210,13 @@ async function verifyStep(message, step, result) {
         const failed=members.filter(m=>!excluded.has(m.id)&&!excluded.has(m.user?.username?.toLowerCase())&&m.voice?.channelId!==destination.id);
         if(failed.length) return {ok:false,reason:`${failed.length} member(s) did not end up in **${destination.name}**.`};
       }
+    }
+    if (step.action==='role_edit') {
+      const rr=resolveRole(guild,step.role); if(rr.status!=='resolved') return {ok:false,reason:`Could not verify role **${step.role}**.`};
+      if(step.name && rr.role.name!==step.name)return {ok:false,reason:'Role name change could not be verified.'};
+      if(step.color && String(rr.role.hexColor).toLowerCase()!==String(step.color).replace(/^#/,'#').toLowerCase())return {ok:false,reason:'Role color change could not be verified.'};
+      if(typeof step.hoist==='boolean' && rr.role.hoist!==step.hoist)return {ok:false,reason:'Role hoist setting could not be verified.'};
+      if(typeof step.mentionable==='boolean' && rr.role.mentionable!==step.mentionable)return {ok:false,reason:'Role mentionable setting could not be verified.'};
     }
     if (step.action==='role_permissions') {
       const rr=resolveRole(guild,step.role); if(rr.status!=='resolved') return {ok:false,reason:`Could not verify role **${step.role}**.`};
@@ -260,9 +271,15 @@ async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
   if(!isOwner) return {handled:false};
   const raw=String(prompt||'').replace(/^jarvis\b[,:!\s-]*/i,'').trim();
   if(!raw) return {handled:false};
+  // AI-FIRST ARCHITECTURE: every JARVIS request reaches the AI planner before
+  // any regex/deterministic handler. Legacy parsers are emergency fallbacks only.
   const deterministicPlan=deterministicAgentPlan(raw);
-  if(deterministicPlan?.steps?.length===1&&deterministicPlan.steps[0].action==='undo'){const entry=journal.latest(config,e=>e.reversible&&e.status==='SUCCESS');if(!entry)return{handled:true,text:'I could not find a recent reversible JARVIS action, sir.'};const result=await undo({message,entry,config,saveConfig});return{handled:true,text:result.text};}
-  const session=getSession(config,message.guild.id,message.author.id)||[]; const recentContext=session.slice(-10).map(x=>`${x.role==='model'?'JARVIS':'USER'}: ${String(x.text||'').slice(0,500)}`).join('\n'); const live=await awareness.snapshot(message.guild).catch(()=>null); const liveContext=live?`LIVE SERVER CONTEXT (reference only; do not invent beyond this):\n${awareness.format(live)}`:''; const knowledge=serverKnowledge.context(config,message.guild.id); const plannerPrompt=[liveContext,knowledge,recentContext?`RECENT CONVERSATION CONTEXT:\n${recentContext}`:'',`CURRENT REQUEST:\n${raw}`].filter(Boolean).join('\n\n'); const rawPlan=deterministicPlan||await parseAgentPlan({message,prompt:plannerPrompt});
+  const session=getSession(config,message.guild.id,message.author.id)||[]; const recentContext=session.slice(-10).map(x=>`${x.role==='model'?'JARVIS':'USER'}: ${String(x.text||'').slice(0,500)}`).join('\n'); const live=await awareness.snapshot(message.guild).catch(()=>null); const liveContext=live?`LIVE SERVER CONTEXT (reference only; do not invent beyond this):\n${awareness.format(live)}`:''; const knowledge=serverKnowledge.context(config,message.guild.id); const plannerPrompt=[liveContext,knowledge,recentContext?`RECENT CONVERSATION CONTEXT:\n${recentContext}`:'',`CURRENT REQUEST:\n${raw}`].filter(Boolean).join('\n\n');
+  let rawPlan=null;
+  try { rawPlan=await parseAgentPlan({message,prompt:plannerPrompt}); } catch(e) { console.warn('[AI-FIRST PLANNER]',e?.message||e); }
+  // Only use the deterministic parser after the AI planner has failed.
+  if(!rawPlan && deterministicPlan) rawPlan=deterministicPlan;
+  if(rawPlan?.steps?.length===1&&rawPlan.steps[0].action==='undo'){const entry=journal.latest(config,e=>e.reversible&&e.status==='SUCCESS');if(!entry)return{handled:true,text:'I could not find a recent reversible JARVIS action, sir.'};const result=await undo({message,entry,config,saveConfig});return{handled:true,text:result.text};}
 
   // Planner failure is NOT a failed user request. A null plan means the AI
   // planner could not classify the message as an executable Discord action
