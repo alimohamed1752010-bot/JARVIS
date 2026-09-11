@@ -3,7 +3,7 @@ const risk = require('./risk');
 const { normalizePermission } = require('./discordActionUtils');
 
 const ACTIONS = new Set([
-  'server_analyze','server_relationship','server_investigate','server_snapshot','server_audit','server_restore','server_diff','undo','autopilot',
+  'server_analyze','server_relationship','server_investigate','server_snapshot','server_audit','server_restore','server_diff','undo','autopilot','history','incident_report','case_explain','member_profile','health_score','schedule_action','schedule_list','schedule_cancel','watch','watch_off',
   'voicemove','voicedisconnect','voicemute','voiceunmute','voicedeafen','voiceundeafen',
   'textmute','textunmute','timeout','untimeout','kick','ban','warn',
   'role_permissions','role_add','role_remove','role_create','role_delete',
@@ -22,6 +22,7 @@ function cleanPlan(plan){
     source: cleanRef(s?.source), destination: cleanRef(s?.destination), role: cleanRef(s?.role),
     channel: cleanRef(s?.channel), parent: cleanRef(s?.parent), channelType: cleanRef(s?.channelType || 'text').toLowerCase(), createParentIfMissing:Boolean(s?.createParentIfMissing), name: cleanRef(s?.name).slice(0,100), reason: cleanRef(s?.reason).slice(0,500),
     durationMs: Math.min(Math.max(Number(s?.durationMs)||600000,1000),28*24*60*60*1000),
+    caseId: String(s?.caseId||'').trim(),
     permissionChanges: Array.isArray(s?.permissionChanges) ? s.permissionChanges.map(x=>({permission:cleanRef(x?.permission),enabled:Boolean(x?.enabled)})).filter(x=>x.permission).slice(0,30) : []
   })).filter(s=>ACTIONS.has(s.action));
   const needsConfirmation = Boolean(plan.needsConfirmation) || steps.some(s=>risk.level(s)>=3) || steps.some(s=>s.targets.some(t=>/^(everyone|everybody|all)$/i.test(t)) && ['role_add','role_remove','kick','ban','timeout','textmute'].includes(s.action)) || steps.some(s=>['role_create','role_permissions','channel_permissions'].includes(s.action) && s.permissionChanges.some(c=>c.enabled && /administrator|manage server|ban members|manage roles|manage channels/i.test(c.permission)));

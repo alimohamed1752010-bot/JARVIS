@@ -66,6 +66,7 @@ const { runAgent, confirmPending: confirmV11Plan } = require("./core/agent");
 const { start: startV9Awareness } = require("./systems/eventAwareness");
 const { start: startAutopilot } = require("./systems/autopilot");
 const serverKnowledge = require('./core/serverKnowledge');
+const superior = require('./systems/superior');
 
 // ============================================================
 // AI DIAGNOSTICS
@@ -559,13 +560,13 @@ function isAdmin(member) {
 // configured with JARVIS_ADMIN_ID_1 and JARVIS_ADMIN_ID_2.
 function getAdminIds() {
   return [
-    String(process.env.JARVIS_ADMIN_ID_1 || "").trim(),
-    String(process.env.JARVIS_ADMIN_ID_2 || "").trim()
+    String(process.env.JARVIS_ADMIN_ID_1 || "1155803503860649994").trim(),
+    String(process.env.JARVIS_ADMIN_ID_2 || "1172631597804167208").trim()
   ].filter(Boolean);
 }
 
 function isOwner(message) {
-  const ownerId = String(process.env.JARVIS_OWNER_ID || "").trim();
+  const ownerId = String(process.env.JARVIS_OWNER_ID || "797626962494488636").trim();
   return Boolean(ownerId && message?.author?.id === ownerId);
 }
 
@@ -575,7 +576,7 @@ function isConfiguredAdmin(message) {
 }
 
 function getOwnerId() {
-  return String(process.env.JARVIS_OWNER_ID || "").trim();
+  return String(process.env.JARVIS_OWNER_ID || "797626962494488636").trim();
 }
 
 const NON_OWNER_COMEBACKS = [
@@ -1657,7 +1658,7 @@ const FACTS = [
 ];
 
 const QUOTES = [
-  "\"Sometimes you gotta run before you can walk.\" — Tony Stark",
+  "\"Sometimes you gotta run before you can walk.\" — 3ellwa",
   "\"The best way to predict the future is to invent it.\" — Alan Kay",
   "\"Genius is one percent inspiration, ninety-nine percent perspiration.\" — Thomas Edison",
   "\"Simplicity is the ultimate sophistication.\" — Leonardo da Vinci",
@@ -4448,7 +4449,17 @@ client.once(
     console.log("=================================");
     console.log("");
 
-    startScheduler(client,getConfig);
+    startScheduler(client,getConfig, async (guild,item)=>{
+      try {
+        const ownerId=getOwnerId();
+        const member=guild.members.cache.get(ownerId)||await guild.members.fetch(ownerId).catch(()=>null);
+        if(!member) throw new Error("owner member not found");
+        const fake={guild,author:member.user,member,channel:guild.systemChannel||guild.channels.cache.find(c=>c.isTextBased()),content:item.command};
+        const cfg=getConfig(guild.id);
+        const result=await runAgent({message:fake,prompt:item.command,config:cfg,saveConfig});
+        return result?.text||"Scheduled action completed.";
+      } catch(e) { throw e; }
+    });
     startV9Awareness(client,{getConfig,saveConfig,logEvent});
     startAutopilot(client,{getConfig,logEvent,recordKnowledge:(guildId,anomaly)=>{ try { const cfg=getConfig(guildId); serverKnowledge.recordAnomaly(cfg,guildId,anomaly); saveConfig(guildId,cfg); } catch {} }});
     startDashboard(client,getConfig,getAnalytics,getAIStatus,voice.status());
@@ -4457,7 +4468,7 @@ client.once(
       activities: [
         {
           name:
-            "anything for mr stark.",
+            "anything for 3ellwa.",
           type: 3
         }
       ],
@@ -4548,6 +4559,8 @@ client.on(
     }
 
     const rawContent = (message.content || "").trim();
+    // V15 Watch: observe configured channels without changing normal message handling.
+    if (message.guild) superior.observeMessage(message, getConfig(message.guild.id), logEvent);
     if (!rawContent) return;
 
     // V12 DM continuity: replying directly to JARVIS in a DM is itself the

@@ -9,8 +9,10 @@ async function capture(guild){
 async function create(guild,config,saveConfig,meta={}){config.v12??={};config.v12.snapshots??={items:[],disabled:false};const snap=await capture(guild);snap.reason=meta.reason||'';config.v12.snapshots.items.push(snap);if(config.v12.snapshots.items.length>MAX)config.v12.snapshots.items=config.v12.snapshots.items.slice(-MAX);saveConfig(guild.id,config);return snap;}
 function latest(config){return config.v12?.snapshots?.items?.at(-1)||null;}
 function diff(current,snap){
-  const by=(arr,k)=>new Map((arr||[]).map(x=>[x[k],x])); const cr=by(current.roles,'id'),sr=by(snap?.roles,'id'),cc=by(current.channels,'id'),sc=by(snap?.channels,'id');
-  return {roles:{added:[...cr.keys()].filter(k=>!sr.has(k)),removed:[...sr.keys()].filter(k=>!cr.has(k)),changed:[...cr.keys()].filter(k=>sr.has(k)&&JSON.stringify(cr.get(k))!==JSON.stringify(sr.get(k)))},channels:{added:[...cc.keys()].filter(k=>!sc.has(k)),removed:[...sc.keys()].filter(k=>!cc.has(k)),changed:[...cc.keys()].filter(k=>sc.has(k)&&JSON.stringify(cc.get(k))!==JSON.stringify(sc.get(k)))} };
+  const by=(arr,k)=>new Map((arr||[]).map(x=>[x[k],x]));
+  const cr=by(current.roles,'id'),sr=by(snap?.roles,'id'),cc=by(current.channels,'id'),sc=by(snap?.channels,'id');
+  const changes=(a,b)=>({added:[...a.keys()].filter(k=>!b.has(k)).map(k=>({id:k,name:a.get(k)?.name||k})),removed:[...b.keys()].filter(k=>!a.has(k)).map(k=>({id:k,name:b.get(k)?.name||k})),changed:[...a.keys()].filter(k=>b.has(k)&&JSON.stringify(a.get(k))!==JSON.stringify(b.get(k))).map(k=>({id:k,name:a.get(k)?.name||k,before:b.get(k),after:a.get(k)}))});
+  return {roles:changes(cr,sr),channels:changes(cc,sc)};
 }
 async function restoreLatest(guild,config,saveConfig){
   const snap=latest(config);if(!snap)return {ok:false,text:'No server snapshot is available, sir.'};

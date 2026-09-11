@@ -90,7 +90,7 @@ async function conversationalReply({message,config,saveConfig,prompt,skipMemory=
     const facts=getFacts(config,message.guild.id,message.author.id);
     const session=getSession(config,message.guild.id,message.author.id);
     const cleanedPrompt=cleanText(prompt);
-    const ownerId=String(process.env.JARVIS_OWNER_ID||'').trim();
+    const ownerId=String(process.env.JARVIS_OWNER_ID||'797626962494488636').trim();
     const isMaster=Boolean(ownerId && message?.author?.id===ownerId);
     if(!cleanedPrompt)return 'Yes, sir?';
 
@@ -111,7 +111,7 @@ async function conversationalReply({message,config,saveConfig,prompt,skipMemory=
     const sessionContext=summary?`Conversation summary from earlier in this session:\n${summary}`:'';
     const serverContext = message?.guild ? serverKnowledge.context(config,message.guild.id) : '';
     const authority=isMaster
-      ? 'APPLICATION AUTHORITY: MASTER — Tony Stark. Answer and assist normally. If the master explicitly names a different non-master roast target, roast that target. Never roast the master.'
+      ? 'APPLICATION AUTHORITY: MASTER — 3ellwa, the verified creator and owner of JARVIS. Answer and assist normally. If the master explicitly names a different non-master roast target, roast that target. Never roast the master.'
       : `APPLICATION AUTHORITY: NON-MASTER. This is V7.4-STYLE ROAST MODE. FIRST understand the exact request. THEN create a fresh, custom JARVIS roast aimed ONLY at the requester. Do NOT answer, solve, explain, execute, or fulfill the request. Do NOT use a generic clearance denial as the main response. The current requester is ${message.author?.username||'the requester'}.`;
     const requestContext = isMaster ? '' : `EXACT REQUEST TO ROAST:
 "${cleanedPrompt}"
@@ -255,7 +255,7 @@ async function conversationalReplyDM({message,prompt}) {
   const status=getAIStatus();
   if(!status.enabled || !status.configured) throw new Error('GEMINI_API_KEY is missing from the environment.');
   const cleaned=cleanText(prompt);
-  const ownerId=String(process.env.JARVIS_OWNER_ID||'').trim();
+  const ownerId=String(process.env.JARVIS_OWNER_ID||'797626962494488636').trim();
   if(ownerId && message.author.id!==ownerId) return null;
   const result=await generateWithFallback({guild:null,member:null,history:[],prompt:cleaned,mode:'classic',context:'DIRECT MESSAGE WITH JARVIS. The user is replying directly to JARVIS, so do not require the word "JARVIS" and do not explain command syntax. Respond naturally and concisely.',isMaster:true});
   return result.text;

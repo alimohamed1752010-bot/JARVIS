@@ -25,6 +25,20 @@ function deterministicAgentPlan(prompt) {
   const raw=String(prompt||'').replace(/^jarvis\b[,:!\s-]*/i,'').trim();
   if(!raw)return null;
   const base=(action,extra={})=>({action,targets:[],excludeTargets:[],source:'',destination:'',role:'',channel:'',parent:'',channelType:'text',name:'',permissionChanges:[],reason:'Owner-directed JARVIS action',durationMs:600000,...extra});
+  const previewMatch=raw.match(/^(?:preview|simulate|dry run|dry-run)\s+(.+)$/i);
+  if(previewMatch){ const p=deterministicAgentPlan(previewMatch[1]); if(p) return p; }
+  if(/^(?:show|view)\s+(?:action )?history(?:\s+(\d+))?$/i.test(raw)) return {summary:'Show recent JARVIS action history.',needsConfirmation:false,steps:[base('history')]};
+  if(/^(?:show|view)\s+(?:the )?snapshot diff|^diff(?: the)? snapshot$/i.test(raw)) return {summary:'Compare the current server against the latest snapshot.',needsConfirmation:false,steps:[base('server_diff')]};
+  if(/^(?:incident report|security incident|show incident)$/i.test(raw)) return {summary:'Generate a JARVIS incident report.',needsConfirmation:false,steps:[base('incident_report')]};
+  let sm=raw.match(/^schedule\s+(\d+)\s*(s|sec|m|min|h|hr|d|day)s?\s+(.+)$/i);
+  if(sm){const mult={s:1000,sec:1000,m:60000,min:60000,h:3600000,hr:3600000,d:86400000,day:86400000}[sm[2].toLowerCase()]||60000;return {summary:`Schedule JARVIS to run: ${sm[3]}`,needsConfirmation:true,steps:[base('schedule_action',{durationMs:Math.min(Number(sm[1])*mult,7*86400000),reason:sm[3].trim()})]};}
+  if(/^schedule\s+list$/i.test(raw)) return {summary:'List scheduled JARVIS actions.',needsConfirmation:false,steps:[base('schedule_list')]};
+  const sc=raw.match(/^schedule\s+cancel\s+(\S+)$/i); if(sc)return {summary:`Cancel scheduled action ${sc[1]}.`,needsConfirmation:false,steps:[base('schedule_cancel',{name:sc[1]})]};
+  if(/^health(?: score)?$/i.test(raw)) return {summary:'Show the JARVIS server health score.',needsConfirmation:false,steps:[base('health_score')]};
+  const ce=raw.match(/^(?:explain|show|view)\s+case\s+#?(\d+)$/i); if(ce)return {summary:`Explain moderation/security case #${ce[1]}.`,needsConfirmation:false,steps:[base('case_explain',{caseId:ce[1]})]};
+  const mp=raw.match(/^(?:profile|member profile|investigate profile)\s+(.+)$/i); if(mp)return {summary:`Show a JARVIS member profile for ${mp[1]}.`,needsConfirmation:false,steps:[base('member_profile',{targets:[mp[1].trim()]})]};
+  if(/^watch\s+(?:off|disable|stop)$/i.test(raw))return {summary:'Disable JARVIS Watch.',needsConfirmation:false,steps:[base('watch_off')]};
+  const wm=raw.match(/^watch\s+(.+)$/i); if(wm)return {summary:`Watch ${wm[1].trim()}.`,needsConfirmation:false,steps:[base('watch',{channel:wm[1].trim()})]};
   if(/^(?:undo|reverse|revert)(?:\s+(?:the\s+)?(?:last|previous)(?:\s+(?:thing|action|change|command))?(?:\s+jarvis\s+(?:did|made))?)?\s*$/i.test(raw))return{summary:'Undo the most recent reversible JARVIS action.',needsConfirmation:false,steps:[base('undo')]};
   let m=raw.match(/^(?:move|drag|send)\s+(everyone|everybody|all)\s+in\s+(.+?)\s+(?:to|into)\s+(.+?)(?:\s+except\s+(.+))?$/i);
   if(m)return{summary:`Move everyone from ${m[2].trim()} to ${m[3].trim()}.`,needsConfirmation:false,steps:[base('voicemove',{targets:['everyone'],source:m[2].trim(),destination:m[3].trim(),excludeTargets:m[4]?splitVoiceTargets(m[4]):[]})]};
@@ -59,6 +73,7 @@ function cleanPlan(plan) {
     source: String(s?.source || '').trim(), destination: String(s?.destination || '').trim(),
     role: String(s?.role || '').trim(), channel: String(s?.channel || '').trim(), parent: String(s?.parent || '').trim(), channelType: String(s?.channelType || 'text').trim().toLowerCase(), name: String(s?.name || '').trim().slice(0,100),
     permissionChanges: Array.isArray(s?.permissionChanges) ? s.permissionChanges.map(x => ({permission:String(x?.permission||'').trim(),enabled:Boolean(x?.enabled)})).filter(x=>x.permission).slice(0,30) : [],
+    caseId: String(s?.caseId || '').trim(),
     createParentIfMissing:Boolean(s?.createParentIfMissing),
     reason: String(s?.reason || '').trim().slice(0,500), durationMs: Math.min(Math.max(Number(s?.durationMs)||600000,1000),28*24*60*60*1000),
   })).filter(s => s.action);
@@ -96,13 +111,23 @@ async function resolveDestination(guild, query, voiceOnly=false) {
 
 async function runStep({message,step,config,saveConfig,dryRun=false}) {
   const action=step.action;
+  if(action==='history') { const superior=require('../systems/superior'); return {ok:true,text:superior.formatHistory(config,step.name||10)}; }
+  if(action==='incident_report') { const superior=require('../systems/superior'); return {ok:true,text:superior.incidentReport(config,message.guild)}; }
+  if(action==='case_explain') { const superior=require('../systems/superior'); return {ok:true,text:superior.explainCase(config,step.caseId||step.name)}; }
+  if(action==='member_profile') { const superior=require('../systems/superior'); const refs=await resolveTargets(message,[step.targets?.[0]||'me']); return {ok:true,text:await superior.memberProfile(message.guild,config,refs[0])}; }
+  if(action==='health_score') { const report=await serverBrain.analyze(message.guild); return {ok:true,text:serverBrain.format(report)}; }
+  if(action==='schedule_action') { const superior=require('../systems/superior'); const v=superior.ensure(config); const item={id:require('node:crypto').randomUUID().slice(0,8),guildId:message.guild.id,createdAt:new Date().toISOString(),executeAt:Date.now()+Number(step.durationMs||60000),command:String(step.reason||'').trim().slice(0,500),requesterId:message.author.id,status:'PENDING'}; if(!item.command)return {ok:false,text:'No command was supplied to schedule, sir.'}; v.scheduledActions.push(item); saveConfig(message.guild.id,config); return {ok:true,text:`⏱️ Scheduled **${item.command}** for <t:${Math.floor(item.executeAt/1000)}:F> (ID: **${item.id}**).`}; }
+  if(action==='schedule_list') { const superior=require('../systems/superior'); const items=superior.ensure(config).scheduledActions.filter(x=>x.status==='PENDING'); return {ok:true,text:`⏱️ **SCHEDULED ACTIONS**\n${items.length?items.map(x=>`• **${x.id}** — <t:${Math.floor(x.executeAt/1000)}:R> — ${x.command}`).join('\n'):'No pending scheduled actions.'}`}; }
+  if(action==='schedule_cancel') { const superior=require('../systems/superior'); const item=superior.ensure(config).scheduledActions.find(x=>x.id===step.name&&x.status==='PENDING'); if(!item)return {ok:false,text:`No pending scheduled action **${step.name}** exists.`}; item.status='CANCELLED'; item.cancelledAt=new Date().toISOString(); saveConfig(message.guild.id,config); return {ok:true,text:`Cancelled scheduled action **${step.name}**.`}; }
+  if(action==='watch') { const superior=require('../systems/superior'); const ch=await resolveDestination(message.guild,step.channel,false); if(!ch)return {ok:false,text:'I could not find that channel, sir.'}; superior.addWatch(config,ch.id); saveConfig(message.guild.id,config); return {ok:true,text:`👁️ JARVIS Watch is now monitoring <#${ch.id}> for activity spikes.`}; }
+  if(action==='watch_off') { const superior=require('../systems/superior'); superior.removeWatch(config); saveConfig(message.guild.id,config); return {ok:true,text:'👁️ JARVIS Watch is now offline, sir.'}; }
   if(action==='server_relationship') { const graph=await serverGraph.build(message.guild); const diagnosis=serverGraph.diagnose(graph,step.reason||''); return {ok:true,text:serverGraph.format(graph,diagnosis)}; }
   if(action==='server_analyze') { const report=await serverBrain.analyze(message.guild); return {ok:true,text:serverBrain.format(report)}; }
   if(action==='server_investigate') { const reasoning=require('./reasoning'); const report=await reasoning.investigate(message.guild,config,saveConfig,{focus:step.reason}); return {ok:true,text:reasoning.format(report)}; }
   if(action==='server_snapshot') { if(dryRun)return {ok:true,simulated:true,text:'Would save a complete JARVIS server snapshot.'}; const snap=await snapshots.create(message.guild,config,saveConfig,{reason:step.reason||'Manual snapshot'}); return {ok:true,text:`Saved server snapshot **${snap.id.slice(0,8)}**.`}; }
   if(action==='server_restore') { if(dryRun)return {ok:true,simulated:true,text:'Would restore the latest saved server snapshot where Discord permits.'}; const r=await snapshots.restoreLatest(message.guild,config,saveConfig); return {ok:r.ok,text:r.text}; }
   if(action==='server_audit') { const logs=await message.guild.fetchAuditLogs({limit:15}).catch(()=>null); if(!logs)return {ok:false,text:'I could not access the audit log.'}; return {ok:true,text:`**RECENT AUDIT ACTIVITY**\n${[...logs.entries.values()].slice(0,10).map(e=>`• ${String(e.action)} — ${e.executor?.tag||'unknown'} — ${e.target?.name||e.target?.tag||e.target?.id||'unknown'}`).join('\n')}`}; }
-  if(action==='server_diff') { const snap=snapshots.latest(config); if(!snap)return {ok:false,text:'There is no saved snapshot to compare against, sir.'}; const current=await snapshots.capture(message.guild); const d=snapshots.diff(current,snap); return {ok:true,text:`**SNAPSHOT DIFFERENCE**\nRoles — added: ${d.roles.added.length}, removed: ${d.roles.removed.length}, changed: ${d.roles.changed.length}\nChannels — added: ${d.channels.added.length}, removed: ${d.channels.removed.length}, changed: ${d.channels.changed.length}`}; }
+  if(action==='server_diff') { const snap=snapshots.latest(config); if(!snap)return {ok:false,text:'There is no saved snapshot to compare against, sir.'}; const current=await snapshots.capture(message.guild); const d=snapshots.diff(current,snap); return {ok:true,text:require('../systems/superior').formatDiff(d,snap)}; }
   if(action==='undo') { const entry=journal.latest(config,e=>e.reversible); if(!entry)return {ok:false,text:'I could not find a recent reversible JARVIS action, sir.'}; return undo({message,entry,config,saveConfig}); }
   if(action==='autopilot') { config.v12??={}; config.v12.autopilot??={enabled:false}; const on=!/^off|disable|stop$/i.test(step.name||'on'); if(dryRun)return {ok:true,simulated:true,text:`Would turn Autopilot **${on?'ON':'OFF'}**.`}; config.v12.autopilot.enabled=on; saveConfig(message.guild.id,config); return {ok:true,text:`Server Autopilot is now **${on?'ONLINE':'OFFLINE'}**.`}; }
   if (['voicemove','voicedisconnect','voicemute','voiceunmute','voicedeafen','voiceundeafen','textmute','textunmute','timeout','untimeout','kick','ban','warn'].includes(action)) {
@@ -230,7 +255,7 @@ async function executePlan({message,plan,config,saveConfig,dryRun=false}) {
 }
 
 async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
-  const isOwner=String(process.env.JARVIS_OWNER_ID||'')===String(message.author.id);
+  const isOwner=String(process.env.JARVIS_OWNER_ID||'797626962494488636')===String(message.author.id);
   if(!isOwner) return {handled:false};
   const raw=String(prompt||'').replace(/^jarvis\b[,:!\s-]*/i,'').trim();
   if(!raw) return {handled:false};
@@ -250,7 +275,7 @@ async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
   if(!validation.ok){ return {handled:true,text:`I couldn't safely build that plan, sir.\n${validation.errors.slice(0,5).map(x=>`• ${x}`).join('\n')}`}; }
   const plan=validation.plan;
   if(!plan || !plan.steps.length) return {handled:false};
-  const simulation=/^(?:simulate|dry run|dry-run)\b/i.test(raw);
+  const simulation=/^(?:preview|simulate|dry run|dry-run)\b/i.test(raw);
   if(!simulation && (plan.needsConfirmation || plan.steps.some(s=>risk.level(s)>=3)) && !confirmed) {
     const preview=summarizePlan(plan,validation.details);
     const token=Buffer.from(JSON.stringify({plan,createdAt:Date.now()})).toString('base64url');
