@@ -67,6 +67,7 @@ const { start: startV9Awareness } = require("./systems/eventAwareness");
 const { start: startAutopilot } = require("./systems/autopilot");
 const serverKnowledge = require('./core/serverKnowledge');
 const superior = require('./systems/superior');
+const { creatorAnswer, creatorFacts, CREATOR_ID } = require('./core/identity');
 
 // ============================================================
 // AI DIAGNOSTICS
@@ -566,8 +567,7 @@ function getAdminIds() {
 }
 
 function isOwner(message) {
-  const ownerId = String(process.env.JARVIS_OWNER_ID || "797626962494488636").trim();
-  return Boolean(ownerId && message?.author?.id === ownerId);
+  return Boolean(CREATOR_ID && message?.author?.id === CREATOR_ID);
 }
 
 function isConfiguredAdmin(message) {
@@ -576,7 +576,7 @@ function isConfiguredAdmin(message) {
 }
 
 function getOwnerId() {
-  return String(process.env.JARVIS_OWNER_ID || "797626962494488636").trim();
+  return CREATOR_ID;
 }
 
 const NON_OWNER_COMEBACKS = [
@@ -4252,7 +4252,7 @@ const autoReplies = [
       t.includes("who built you"),
 
     reply: () =>
-      "I was built for this server, sir."
+      creatorAnswer()
   },
 
   {

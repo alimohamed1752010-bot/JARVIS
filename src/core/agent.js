@@ -18,6 +18,7 @@ const MAX_AGENT_LOOPS = Math.min(Math.max(Number(process.env.JARVIS_AGENT_LOOPS 
 const HIGH_RISK = new Set(['ban','kick','timeout','role_permissions','role_add','role_remove','channel_edit','channel_delete','role_delete','channel_create','role_create','member_nickname','channel_permissions','server_restore','autopilot','server_relationship']);
 
 
+const { CREATOR_ID } = require('./identity');
 // Deterministic safety-net for common multi-step administration requests.
 // The AI planner remains the primary natural-language planner, but a temporary
 // model failure must not turn a clearly structured request into "no valid plan".
@@ -255,7 +256,7 @@ async function executePlan({message,plan,config,saveConfig,dryRun=false}) {
 }
 
 async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
-  const isOwner=String(process.env.JARVIS_OWNER_ID||'797626962494488636')===String(message.author.id);
+  const isOwner=Boolean(CREATOR_ID && String(message.author.id)===CREATOR_ID);
   if(!isOwner) return {handled:false};
   const raw=String(prompt||'').replace(/^jarvis\b[,:!\s-]*/i,'').trim();
   if(!raw) return {handled:false};

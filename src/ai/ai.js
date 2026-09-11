@@ -3,6 +3,7 @@ const { systemPrompt } = require('./personality');
 const { ensureV8, getSession, pushSession, getSessionSummary, setSessionSummary, allowRequest, recordUsage, acquireRequestLock, releaseRequestLock } = require('../v8/core');
 const { runToolRequest } = require('../v8/tools');
 const serverKnowledge = require('../core/serverKnowledge');
+const { creatorAnswer, creatorKnowledge, CREATOR_ID, creatorFacts } = require('../core/identity');
 
 const MAX_MESSAGE_CHARS = 2200;
 const COOLDOWN_MS = 1200;
@@ -90,9 +91,14 @@ async function conversationalReply({message,config,saveConfig,prompt,skipMemory=
     const facts=getFacts(config,message.guild.id,message.author.id);
     const session=getSession(config,message.guild.id,message.author.id);
     const cleanedPrompt=cleanText(prompt);
-    const ownerId=String(process.env.JARVIS_OWNER_ID||'797626962494488636').trim();
-    const isMaster=Boolean(ownerId && message?.author?.id===ownerId);
+    const isMaster=Boolean(CREATOR_ID && message?.author?.id===CREATOR_ID);
     if(!cleanedPrompt)return 'Yes, sir?';
+
+    // Creator identity is application knowledge, verified by the configured Discord owner ID.
+    // Everyone gets the same verified creator answer when they ask who made JARVIS.
+    if (/\bwho\s+(?:made|created|built)\s+(?:you|u)\b|\bwho\s+is\s+your\s+(?:creator|owner|maker|builder)\b|\bwho\s+owns\s+you\b/i.test(cleanedPrompt)) {
+      return creatorAnswer();
+    }
 
     const tool=isMaster ? await runToolRequest(message,cleanedPrompt) : {handled:false};
     if(tool.handled){
@@ -111,13 +117,13 @@ async function conversationalReply({message,config,saveConfig,prompt,skipMemory=
     const sessionContext=summary?`Conversation summary from earlier in this session:\n${summary}`:'';
     const serverContext = message?.guild ? serverKnowledge.context(config,message.guild.id) : '';
     const authority=isMaster
-      ? 'APPLICATION AUTHORITY: MASTER — 3ellwa, the verified creator and owner of JARVIS. Answer and assist normally. If the master explicitly names a different non-master roast target, roast that target. Never roast the master.'
+      ? `APPLICATION AUTHORITY: MASTER — ${creatorFacts().name}, the verified creator and owner of JARVIS. Answer and assist normally. If the master explicitly names a different non-master roast target, roast that target. Never roast the master.`
       : `APPLICATION AUTHORITY: NON-MASTER. This is V7.4-STYLE ROAST MODE. FIRST understand the exact request. THEN create a fresh, custom JARVIS roast aimed ONLY at the requester. Do NOT answer, solve, explain, execute, or fulfill the request. Do NOT use a generic clearance denial as the main response. The current requester is ${message.author?.username||'the requester'}.`;
     const requestContext = isMaster ? '' : `EXACT REQUEST TO ROAST:
 "${cleanedPrompt}"
 
 Generate the response specifically from this request. The request is the setup; the requester is the punchline.`;
-    const result=await generateWithFallback({guild:message.guild,member:message.member,history,prompt:cleanedPrompt,mode,context:[context,serverContext,memoryContext,sessionContext,authority,requestContext].filter(Boolean).join('\n\n'),isMaster});
+    const result=await generateWithFallback({guild:message.guild,member:message.member,history,prompt:cleanedPrompt,mode,context:[context,creatorKnowledge(),serverContext,memoryContext,sessionContext,authority,requestContext].filter(Boolean).join('\n\n'),isMaster});
 
     if(!skipMemory){
       pushSession(config,message.guild.id,message.author.id,'user',cleanedPrompt);
@@ -255,8 +261,7 @@ async function conversationalReplyDM({message,prompt}) {
   const status=getAIStatus();
   if(!status.enabled || !status.configured) throw new Error('GEMINI_API_KEY is missing from the environment.');
   const cleaned=cleanText(prompt);
-  const ownerId=String(process.env.JARVIS_OWNER_ID||'797626962494488636').trim();
-  if(ownerId && message.author.id!==ownerId) return null;
+  if(CREATOR_ID && message.author.id!==CREATOR_ID) return null;
   const result=await generateWithFallback({guild:null,member:null,history:[],prompt:cleaned,mode:'classic',context:'DIRECT MESSAGE WITH JARVIS. The user is replying directly to JARVIS, so do not require the word "JARVIS" and do not explain command syntax. Respond naturally and concisely.',isMaster:true});
   return result.text;
 }
