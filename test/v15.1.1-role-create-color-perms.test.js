@@ -1,0 +1,10 @@
+const fs=require('fs');
+const assert=require('assert');
+const utils=fs.readFileSync(require.resolve('../src/core/discordActionUtils'),'utf8');
+assert(utils.includes("['manage threads', PermissionsBitField.Flags.ManageThreads]"));
+assert(utils.includes('function normalizeRoleColor'));
+const agent=fs.readFileSync(require.resolve('../src/core/agent'),'utf8');
+assert(agent.includes('normalizeRoleColor(step.color)'));
+assert(agent.includes('options.color=normalizedColor'));
+assert(agent.includes('role\\s+(?:called|named)'));
+console.log('v15.1.1 role creation color/permissions checks passed');

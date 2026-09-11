@@ -1,7 +1,7 @@
 const { PermissionsBitField, ChannelType } = require('discord.js');
 const { parseAgentPlan } = require('../ai');
 const { resolveMember, resolveChannel } = require('./resolver');
-const { resolveRole, resolveChannelAny, normalizePermission } = require('./discordActionUtils');
+const { resolveRole, resolveChannelAny, normalizePermission, normalizeRoleColor } = require('./discordActionUtils');
 const { execute } = require('./executor');
 const journal = require('./journal');
 const { getSession } = require('../v8/core');
@@ -51,6 +51,28 @@ function deterministicAgentPlan(prompt) {
   m=raw.match(/^(?:make|create)\s+(?:(?:a|the)\s+)?role\s+named\s+["“](.+?)["”]\s*,?\s*(?:with|that\s+has)\s+(.+?)\s*(?:,?\s+and\s+then|\s+then)\s+(?:give|add)\s+(?:it|that\s+role|the\s+role)\s+to\s+(.+)$/i);
   if(!m)m=raw.match(/^(?:make|create)\s+(?:(?:a|the)\s+)?role\s+named\s+["“](.+?)["”]\s*,?\s*(?:with|that\s+has)\s+(.+?)\s*,?\s+and\s+(?:give|add)\s+(?:it|that\s+role|the\s+role)\s+to\s+(.+)$/i);
   if(m){const permissionChanges=parsePermissionList(m[2]);if(m[1].trim()&&permissionChanges.length&&m[3].trim())return{summary:`Create role "${m[1].trim()}" with the requested permissions and assign it to ${m[3].trim()}.`,needsConfirmation:false,steps:[base('role_create',{name:m[1].trim(),permissionChanges}),base('role_add',{role:m[1].trim(),targets:splitVoiceTargets(m[3].trim())})]};}
+  // Natural "called ... make it COLOR, give it PERMS, then give it to MEMBER" form.
+  m=raw.match(/^(?:make|create)\s+(?:(?:a|the)\s+)?role\s+(?:called|named)\s+["“]?(.+?)["”]?\s+(?:and\s+)?make\s+it\s+(.+?)\s*,?\s*(?:then\s+)?give\s+it\s+(?:the\s+)?(?:permissions?|perms?)\s+(.+?)\s*,?\s*(?:and\s+then\s+|then\s+)?give\s+it\s+to\s+(.+)$/i);
+  if(m){
+    const color=normalizeRoleColor(m[2].trim())||m[2].trim();
+    const permissionChanges=parsePermissionList(m[3]);
+    if(m[1].trim()&&permissionChanges.length&&m[4].trim())
+      return {summary:`Create role "${m[1].trim()}", set its color to ${color}, give it the requested permissions, and assign it to ${m[4].trim()}.`,needsConfirmation:false,steps:[
+        base('role_create',{name:m[1].trim(),color,permissionChanges}),
+        base('role_add',{role:m[1].trim(),targets:splitVoiceTargets(m[4].trim())})
+      ]};
+  }
+  // Also accept "create a role called X, make it COLOR, give it PERM1 and PERM2, then give it to USER".
+  m=raw.match(/^(?:make|create)\s+(?:(?:a|the)\s+)?role\s+(?:called|named)\s+["“]?(.+?)["”]?\s*,?\s*(?:and\s+)?make\s+it\s+(.+?)\s*,?\s*(?:give|add)\s+it\s+(?:the\s+)?(.+?)\s*,?\s*(?:and\s+then\s+|then\s+)?(?:give|add)\s+it\s+to\s+(.+)$/i);
+  if(m){
+    const color=normalizeRoleColor(m[2].trim())||m[2].trim();
+    const permissionChanges=parsePermissionList(m[3]);
+    if(m[1].trim()&&permissionChanges.length&&m[4].trim())
+      return {summary:`Create role "${m[1].trim()}", set its color to ${color}, configure permissions, and assign it to ${m[4].trim()}.`,needsConfirmation:false,steps:[
+        base('role_create',{name:m[1].trim(),color,permissionChanges}),
+        base('role_add',{role:m[1].trim(),targets:splitVoiceTargets(m[4].trim())})
+      ]};
+  }
   // Also accept an unquoted role name for ordinary natural-language commands.
   if(!m)m=raw.match(/^(?:make|create)\s+(?:(?:a|the)\s+)?role\s+named\s+(.+?)\s+(?:with|that\s+has)\s+(.+?)\s*,?\s+and\s+(?:give|add)\s+(?:it|that\s+role|the\s+role)\s+to\s+(.+)$/i);
   if(m){const permissionChanges=parsePermissionList(m[2]);const name=m[1].trim().replace(/^["“]|["”]$/g,'').trim();if(name&&permissionChanges.length&&m[3].trim())return{summary:`Create role "${name}" with the requested permissions and assign it to ${m[3].trim()}.`,needsConfirmation:false,steps:[base('role_create',{name,permissionChanges}),base('role_add',{role:name,targets:splitVoiceTargets(m[3].trim())})]};}
@@ -172,8 +194,15 @@ async function runStep({message,step,config,saveConfig,dryRun=false}) {
     if(!message.guild.members.me.permissions.has(PermissionsBitField.Flags.ManageRoles)) throw new Error('I need Manage Roles.');
     const perms=new PermissionsBitField();
     for(const c of step.permissionChanges||[]){const flag=normalizePermission(c.permission);if(!flag)throw new Error(`Unknown permission **${c.permission}**.`);if(c.enabled)perms.add(flag);}
-    if(dryRun) return {ok:true,simulated:true,text:`Would create role **${step.name}**${step.permissionChanges.length?` with ${step.permissionChanges.length} permission change(s)`:''}.`};
-    const role=await message.guild.roles.create({name:step.name,permissions:perms,reason:step.reason||'JARVIS V12'}); journal.record(config,{action:'ROLE_CREATE',actorId:message.author.id,targetId:role.id,reason:step.reason,before:null,after:{name:role.name,permissions:role.permissions.bitfield.toString()},reversible:false}); saveConfig(message.guild.id,config); return {ok:true,text:`Created role **${role.name}**.`,roleId:role.id};
+    const normalizedColor = step.color ? normalizeRoleColor(step.color) : null;
+    if(step.color && !normalizedColor) throw new Error(`Invalid role color **${step.color}**. Use a hex color or a recognizable color name.`);
+    if(dryRun) return {ok:true,simulated:true,text:`Would create role **${step.name}**${normalizedColor?` with color **${normalizedColor}**`:''}${step.permissionChanges.length?` and ${step.permissionChanges.length} permission change(s)`:''}.`};
+    const options={name:step.name,permissions:perms,reason:step.reason||'JARVIS AI: owner-directed role creation'};
+    if(normalizedColor) options.color=normalizedColor;
+    const role=await message.guild.roles.create(options);
+    journal.record(config,{action:'ROLE_CREATE',actorId:message.author.id,targetId:role.id,reason:step.reason,before:null,after:{name:role.name,color:role.hexColor,permissions:role.permissions.bitfield.toString()},reversible:false});
+    saveConfig(message.guild.id,config);
+    return {ok:true,text:`Created role **${role.name}**${normalizedColor?` with color **${normalizedColor}**`:''}.`,roleId:role.id};
   }
   if (action==='role_delete') {
     const rr=resolveRole(message.guild,step.role); if(rr.status!=='resolved') throw new Error(`I couldn't uniquely resolve role **${step.role}**.`); if(rr.role.managed||!rr.role.editable) throw new Error(`Discord will not let me delete **${rr.role.name}**.`);

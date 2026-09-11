@@ -189,7 +189,7 @@ Rules:
 - Preserve member names exactly as spoken. Use "me" or "everyone" when spoken.
 - For voice moves, if the user says "everyone in gen 1 to gen 2 except Steve", output targets=["everyone"], source="gen 1", destination="gen 2", excludeTargets=["Steve"]. Never put "everyone in gen 1" into targets.
 - For voice moves, destination is the requested voice channel name.
-- For role permission changes, role is the exact role name or role mention. permissionChanges is an array of {"permission":"...","enabled":true|false}. Understand natural names such as "soundboard", "use soundboard", "send messages", "manage messages", "view channel", "connect", "speak", "mute members", "move members", "administrator".
+- For role permission changes, role is the exact role name or role mention. permissionChanges is an array of {"permission":"...","enabled":true|false}. Understand natural names such as "soundboard", "use soundboard", "send messages", "manage messages", "manage threads", "view channel", "connect", "speak", "mute members", "move members", "administrator".
 - "remove soundboard access" means permissionChanges=[{"permission":"soundboard","enabled":false}].
 - For role_add/role_remove, role is the role name and targets contains the member references.
 - For channel_edit, channel is the channel name and name is the requested new name.
@@ -238,7 +238,7 @@ Rules:
 - For channel creation, infer channelType from words like category, voice, stage, forum, announcement; default to text.
 - For channel creation, parent may contain an existing category name.
 - For role creation/editing, permissionChanges may describe permissions to enable/disable. Role edits may also use name/color/hoist/mentionable.
-- Role color should be emitted as a CSS hex string in color when requested; preserve role name if it is not being changed.
+- Role color should be emitted as a CSS hex string in color when requested; preserve role name if it is not being changed. Convert descriptive colors such as "whiteish-yellow", "pale yellow", "cream", "gold", etc. to a reasonable 6-digit hex color.
 - Channel permission changes may target a role mention/name, a member mention/name, or @everyone. Never invent an entity.
 - If the user asks to compare the server with a snapshot, use server_analyze and explainable fields only; do not invent data.
 - Never output code, markdown, explanations, or IDs.

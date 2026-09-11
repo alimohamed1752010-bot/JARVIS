@@ -7,6 +7,8 @@ const PERMISSION_ALIASES = new Map([
   ['view channel', PermissionsBitField.Flags.ViewChannel],
   ['view channels', PermissionsBitField.Flags.ViewChannel],
   ['manage messages', PermissionsBitField.Flags.ManageMessages],
+  ['manage threads', PermissionsBitField.Flags.ManageThreads],
+  ['manage thread', PermissionsBitField.Flags.ManageThreads],
   ['manage channels', PermissionsBitField.Flags.ManageChannels],
   ['manage roles', PermissionsBitField.Flags.ManageRoles],
   ['mention everyone', PermissionsBitField.Flags.MentionEveryone],
@@ -69,4 +71,36 @@ function resolveChannelAny(guild, query) {
   return { status: 'resolved', channel: matches[0], candidates: matches };
 }
 
-module.exports = { normalizePermission, permissionName, resolveRole, resolveChannelAny };
+function normalizeRoleColor(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return null;
+  const named = {
+    'whiteish-yellow': '#fff7b2',
+    'whitish-yellow': '#fff7b2',
+    'white yellow': '#fff7b2',
+    'pale yellow': '#fff7b2',
+    'light yellow': '#fff3a6',
+    'cream': '#fffdd0',
+    'ivory': '#fffff0',
+    'white': '#ffffff',
+    'black': '#000000',
+    'red': '#ff0000',
+    'green': '#00ff00',
+    'blue': '#0000ff',
+    'yellow': '#ffff00',
+    'orange': '#ffa500',
+    'purple': '#800080',
+    'pink': '#ffc0cb',
+    'cyan': '#00ffff',
+    'teal': '#008080',
+    'gold': '#ffd700',
+    'golden': '#ffd700',
+    'gray': '#808080',
+    'grey': '#808080'
+  };
+  if (named[raw]) return named[raw];
+  const hex = raw.startsWith('#') ? raw : `#${raw}`;
+  return /^#[0-9a-f]{6}$/i.test(hex) ? hex.toLowerCase() : null;
+}
+
+module.exports = { normalizePermission, permissionName, normalizeRoleColor, resolveRole, resolveChannelAny };
