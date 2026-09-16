@@ -52,3 +52,10 @@ V18 keeps the V17 execution stack and adds **real, read-only PC awareness** to t
 V18 does **not** claim capabilities it cannot reliably perform. A screenshot can be captured, but V18 does not pretend that the Railway planner can visually inspect the pixels unless a real vision pipeline is connected. Likewise, `undo` is not advertised as a universal rollback system because arbitrary app actions cannot safely be reversed. Existing Discord/server scheduling remains separate from PC execution.
 
 This is intentional: a smaller set of verified capabilities is better than a chatbot confidently reporting that it clicked something it never touched.
+
+
+## V18.4 moderation compatibility
+
+V18.4 restores the proven V15 moderation-first routing path for natural-language Discord moderation while retaining the V18 PC agent, browser controls, Spotify, telemetry, app catalog, planning, and verification systems.
+
+Natural moderation requests are handled by the existing local Discord member resolver and moderation executor before the AI-first conversational/PC planner. This prevents the AI planner from fabricating bot-permission failures for valid timeout requests. Discord's actual API/permission result remains authoritative.

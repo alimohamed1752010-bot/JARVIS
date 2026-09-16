@@ -355,8 +355,14 @@ async function spotifyPlay(query) {
   await typeText(q);
   await new Promise(r=>setTimeout(r,700));
   await key('{ENTER}');
-  await new Promise(r=>setTimeout(r,500));
-  return `Spotify search opened for “${q}”.`;
+  await new Promise(r=>setTimeout(r,1200));
+  // After search, move focus to the first result and request playback.
+  // Spotify client layouts can vary, so the result is phrased as a playback request.
+  await key('{TAB}').catch(()=>{});
+  await new Promise(r=>setTimeout(r,200));
+  await key('{ENTER}').catch(()=>{});
+  await new Promise(r=>setTimeout(r,700));
+  return `Spotify search opened for “${q}” and playback was requested.`;
 }
 
 async function openUrl(url,browser='brave'){

@@ -22,6 +22,7 @@ const HIGH_RISK = new Set(['ban','kick','timeout','role_permissions','role_edit'
 
 
 const { CREATOR_ID } = require('./identity');
+function parseNaturalDuration(text){const m=String(text||'').match(/(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\b/i);if(!m)return 10*60*1000;const n=Number(m[1]);const u=m[2].toLowerCase();const mult=/^(?:s|sec)/.test(u)?1000:/^(?:m|min)/.test(u)?60000:/^(?:h|hr)/.test(u)?3600000:86400000;return Math.min(Math.max(n*mult,1000),28*24*60*60*1000);}
 // Deterministic safety-net for common multi-step administration requests.
 // The AI planner remains the primary natural-language planner, but a temporary
 // model failure must not turn a clearly structured request into "no valid plan".
@@ -44,6 +45,9 @@ function deterministicAgentPlan(prompt) {
   if (/^(?:pc|computer|system) (?:status|health|report|status report|health report)|^(?:give|show|run|generate) (?:me )?(?:a )?(?:pc|computer|system) (?:status|health|status report|health report)|^(?:how is|check) (?:my )?(?:pc|computer|system)$/i.test(raw)) return {summary:'Inspect current Windows PC health and resource state.',needsConfirmation:false,steps:[base('pc_state')]};
   if (/^(?:network|internet|connection) (?:status|health)|^is my internet (?:working|up)$/i.test(raw)) return {summary:'Inspect current Windows network state.',needsConfirmation:false,steps:[base('pc_network_status')]};
   if (/^(?:take|capture|grab) (?:a )?(?:screenshot|screen shot)$/i.test(raw)) return {summary:'Capture the primary display.',needsConfirmation:false,steps:[base('pc_screenshot')]};
+  // Natural moderation phrasing: "time @user out for 1 minute" maps to Discord timeout.
+  let tm=raw.match(/^(?:time|put)\s+(.+?)\s+out(?:\s+for\s+(.+))?$/i);
+  if(tm) return {summary:`Timeout ${tm[1].trim()}${tm[2]?` for ${tm[2].trim()}`:''}.`,needsConfirmation:true,steps:[base('timeout',{targets:[tm[1].trim()],durationMs:tm[2]?parseNaturalDuration(tm[2]):10*60*1000})]};
   // Desktop command fallback: natural-language PC requests should never fall through
   // to a conversational reply just because the AI planner is unavailable or chooses
   // not to emit a tool plan. This is intentionally deterministic and only creates
@@ -106,7 +110,10 @@ function deterministicAgentPlan(prompt) {
       const play=raw.match(/\b(?:play|put on)\s+(.+?)(?=\s*(?:,|;)\s*(?:(?:and|then)\s+)?(?:set|make|run|open|launch|start|put\s+on)\b|\s+(?:and|then)\s+(?:set|make|run|open|launch|start)\b|$)/i);
       // "put on Spotify" means launch Spotify, not search Spotify for a track
       // literally named "Spotify". Humanity has suffered enough from that bug.
-      if(play && /\bspotify\b/i.test(raw) && !/^spotify$/i.test(play[1].trim())) steps.push(base('pc_spotify_play',{name:play[1].trim().replace(/[\s,;]+$/,'')}));
+      if(play && /\bspotify\b/i.test(raw) && !/^spotify$/i.test(play[1].trim())) {
+        const track=play[1].trim().replace(/\s+(?:on|in)\s+spotify\s*$/i,'').trim();
+        if(track) steps.push(base('pc_spotify_play',{name:track}));
+      }
       const vol=raw.match(/(?:set|make)\s+(?:the\s+)?volume\s+(?:to\s+)?(\d{1,3})\s*%?/i);
       if(vol) steps.push(base('pc_volume',{durationMs:Math.max(0,Math.min(100,Number(vol[1])))}));
       if(/\b(?:run|open|launch|start|play|fire up|get)\s+(?:minecraft|mc|minecraft java)\b/i.test(raw)) pushApp('Minecraft');
@@ -419,7 +426,7 @@ async function executePlan({message,plan,config,saveConfig,dryRun=false}) {
   const failed=outputs.find(x=>!x.ok||x.verified===false);
   journal.record(config,{action:'PLAN_EXECUTION',actorId:message.author.id,reason:plan.summary,before:null,after:{steps:success,total:plan.steps.length,verified},reversible:false,metadata:{summary:plan.summary,steps:plan.steps.map(s=>s.action)}});
   saveConfig(message.guild.id,config);
-  return {handled:true,text:`**JARVIS V18.2 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
+  return {handled:true,text:`**JARVIS V18.3 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
 }
 
 async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {

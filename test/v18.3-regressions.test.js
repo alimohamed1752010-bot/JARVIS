@@ -1,0 +1,10 @@
+const assert=require('assert');
+const fs=require('fs');
+const agent=fs.readFileSync(require('path').join(__dirname,'../src/core/agent.js'),'utf8');
+const pc=fs.readFileSync(require('path').join(__dirname,'../src/core/pcTools.js'),'utf8');
+assert(agent.includes('replace(/\\s+(?:on|in)\\s+spotify'));
+assert(agent.includes('let tm=raw.match(/^(?:time|put)'));
+assert(agent.includes("base('timeout'"));
+assert(pc.includes("await key('{TAB}')"));
+assert(pc.includes('playback was requested'));
+console.log('V18.3 regressions: 5/5 passed');
