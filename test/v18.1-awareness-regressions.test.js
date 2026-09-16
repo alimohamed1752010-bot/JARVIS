@@ -1,0 +1,12 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const src=fs.readFileSync(path.join(__dirname,'..','src','core','agent.js'),'utf8');
+assert.match(src,/Inspect running applications and processes on the PC/);
+assert.match(src,/Inspect current active Windows window|Inspect the active Windows window/);
+assert.match(src,/Inspect current RAM usage on the PC/);
+assert.match(src,/Inspect current CPU usage on the PC/);
+assert.match(src,/Inspect current storage availability on the PC/);
+assert.match(src,/Inspect current Windows PC health and resource state/);
+for(const action of ['pc_processes','pc_active_window','pc_system_status','pc_state','pc_network_status']) assert.ok(src.includes(`base('${action}')`),`missing ${action}`);
+console.log('V18.1 awareness routing regression checks: PASS');

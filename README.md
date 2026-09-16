@@ -35,7 +35,7 @@ V17.3 adds a large recognition catalog for common websites, desktop apps, launch
 - No executable paths are hardcoded for the catalog entries
 
 
-## V18.0 PC Agent
+## V18.1 PC Agent
 
 V18 keeps the V17 execution stack and adds **real, read-only PC awareness** to the planner when the Windows agent is connected. The Railway bot remains the brain and the Windows PC agent remains the execution layer.
 
