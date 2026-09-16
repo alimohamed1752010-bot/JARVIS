@@ -53,9 +53,4 @@ V18 does **not** claim capabilities it cannot reliably perform. A screenshot can
 
 This is intentional: a smaller set of verified capabilities is better than a chatbot confidently reporting that it clicked something it never touched.
 
-
-## V18.4 moderation compatibility
-
-V18.4 restores the proven V15 moderation-first routing path for natural-language Discord moderation while retaining the V18 PC agent, browser controls, Spotify, telemetry, app catalog, planning, and verification systems.
-
-Natural moderation requests are handled by the existing local Discord member resolver and moderation executor before the AI-first conversational/PC planner. This prevents the AI planner from fabricating bot-permission failures for valid timeout requests. Discord's actual API/permission result remains authoritative.
+- V18.5 fixes natural Spotify requests such as “play Into It on Spotify” so the full phrase is not treated as an application name.

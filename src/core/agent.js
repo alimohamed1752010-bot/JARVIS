@@ -105,7 +105,9 @@ function deterministicAgentPlan(prompt) {
         const candidate=m?.[1]?.trim();
         const isCatalogWeb=Object.keys(WEB_ALIASES).some(x=>x.toLowerCase()===String(candidate||'').toLowerCase());
         const isKnownApp=KNOWN_APPS.some(x=>x.toLowerCase()===String(candidate||'').toLowerCase()) || Object.keys(APP_ALIASES).some(x=>x.toLowerCase()===String(candidate||'').toLowerCase());
-        if(candidate && !isCatalogWeb && (isKnownApp || candidate.length<=60) && !/^(the )?(volume|music|browser)$/i.test(candidate)) pushApp(candidate);
+        // V18.5: "play <track> on Spotify" is a Spotify music intent, never an app name.
+        const isSpotifyTrackPhrase=/^(?:.+?)\s+(?:on|in)\s+spotify$/i.test(String(candidate||''));
+        if(candidate && !isSpotifyTrackPhrase && !isCatalogWeb && (isKnownApp || candidate.length<=60) && !/^(the )?(volume|music|browser)$/i.test(candidate)) pushApp(candidate);
       }
       const play=raw.match(/\b(?:play|put on)\s+(.+?)(?=\s*(?:,|;)\s*(?:(?:and|then)\s+)?(?:set|make|run|open|launch|start|put\s+on)\b|\s+(?:and|then)\s+(?:set|make|run|open|launch|start)\b|$)/i);
       // "put on Spotify" means launch Spotify, not search Spotify for a track

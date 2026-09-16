@@ -4775,20 +4775,6 @@ client.on(
     // remain available as fallbacks below.
     // ========================================================
     const universalPrompt = rawContent.replace(/\bjarvis\b/ig, '').trim();
-
-    // V18.4: preserve the proven V15 moderation-first path.
-    // Discord moderation requests are resolved/executed by the legacy
-    // moderation handler before the conversational/PC AI planner. This
-    // prevents the AI planner from inventing permission failures for valid
-    // timeout requests. PC requests still continue through the V18 planner.
-    if (universalPrompt) {
-      try {
-        if (await understandOwnerModeration(message, universalPrompt)) return;
-      } catch (error) {
-        console.error('[V18.4 LEGACY MODERATION]', error);
-      }
-    }
-
     let aiFirstHandled = false;
     if (universalPrompt) {
       try {
