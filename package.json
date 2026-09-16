@@ -1,7 +1,7 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "17.1.0",
-  "description": "JARVIS V17.1 Unified AI + Windows PC Agent with verified browser launching",
+  "version": "17.3.0",
+  "description": "JARVIS V17.3 Unified AI + Windows PC Agent with broad app, game and web intent catalog",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

@@ -1,6 +1,6 @@
-# JARVIS V17.1 — REAL AI PC + DISCORD
+# JARVIS V17.3 — REAL AI PC + DISCORD
 
-V17.1 is the natural-language PC-control build.
+V17.3 is the natural-language PC-control build.
 
 - Railway remains the AI/Discord brain.
 - Windows runs a local PC Agent over an authenticated outbound WebSocket.
@@ -25,3 +25,11 @@ JARVIS_PC_TOKEN=THE-SAME-SECRET
 ```
 
 Then run `START-JARVIS-PC.bat`.
+
+## V17.3 Broad Intent Catalog
+V17.3 adds a large recognition catalog for common websites, desktop apps, launchers, and games. The catalog is an **intent layer only**: installed applications are still discovered dynamically through Windows Start Menu/registry/PATH, while Epic titles continue to use manifest discovery. Web destinations are opened through the verified browser path. This preserves the older execution system rather than replacing it.
+
+- 166+ website destinations
+- 220+ app/game names
+- Existing V16/V17 PC actions and Discord actions preserved
+- No executable paths are hardcoded for the catalog entries

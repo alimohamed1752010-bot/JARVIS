@@ -1,6 +1,7 @@
 const { execFile, spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { APP_ALIASES: CATALOG_APP_ALIASES, KNOWN_APPS, WEB_ALIASES } = require('./pcCatalog');
 
 const IS_WIN = process.platform === 'win32';
 const MAX_OUTPUT = 5000;
@@ -42,7 +43,13 @@ const APP_ALIASES={
 };
 function normalizeApp(app){
   const raw=String(app||'').trim().toLowerCase().replace(/\.exe$/,'');
-  return APP_ALIASES[raw] || raw;
+  const catalog=CATALOG_APP_ALIASES[raw];
+  const legacy=APP_ALIASES[raw];
+  return String(catalog || legacy || raw).toLowerCase();
+}
+function catalogAppDisplay(app){
+  const raw=String(app||'').trim().toLowerCase();
+  return CATALOG_APP_ALIASES[raw] || KNOWN_APPS.find(x=>String(x).toLowerCase()===raw) || String(app||'').trim();
 }
 
 async function startMenuApps(){
@@ -187,7 +194,8 @@ async function discoverApplication(query){
 
 async function openApp(app,args=[]){
   const requested=String(app||'').trim(); if(!requested)throw new Error('Application name is missing.');
-  const a=normalizeApp(requested);
+  const display=catalogAppDisplay(requested);
+  const a=normalizeApp(display);
   if(a==='settings'){await runPS("Start-Process 'ms-settings:'");return {started:true,via:'protocol'};}
   if(/^(rocket\s*league)$/i.test(requested)) return launchEpicGame('Rocket League');
   if(/^(minecraft|minecraft\s+java|mc)$/i.test(requested)) return launchModrinth('Minecraft');
@@ -213,7 +221,7 @@ async function openApp(app,args=[]){
   }
   // For ordinary apps, prefer the actual Start Menu registration. This is what makes
   // arbitrary installed apps work without a hardcoded executable path.
-  const start=await discoverStartApp(requested);
+  const start=await discoverStartApp(display || requested);
   if(start?.ambiguous) throw new Error(`Multiple installed apps matched "${requested}": ${start.matches.map(x=>x.Name).join(', ')}.`);
   if(start) return start.AppID ? startStartMenuApp(start.AppID,args) : launchRegistryApp(start,args);
   // PATH and a small set of dynamic install roots remain a fallback for apps that do not register in Start.
@@ -222,7 +230,7 @@ async function openApp(app,args=[]){
     const where=await new Promise((resolve,reject)=>execFile('where.exe',[exe],{windowsHide:true,timeout:5000},(error,stdout)=>error?reject(error):resolve(String(stdout||'').split(/\r?\n/).map(x=>x.trim()).find(Boolean)||'')));
     if(where){await spawnApp(where,args);return {started:true,via:'PATH',executable:where};}
   }catch{}
-  throw new Error(`I couldn't discover an installed application named "${requested}".`);
+  throw new Error(`I couldn't discover an installed application named "${requested}". I checked Windows app registrations and dynamic executable discovery.`);
 }
 async function closeApp(app){
   const a=normalizeApp(app); if(!a)throw new Error('Application name is missing.');
@@ -375,4 +383,4 @@ async function shell(command){
   const c=String(command||'').trim(); if(!c)throw new Error('Command is empty.'); if(c.length>2000)throw new Error('Command too long.'); if(BLOCKED.test(c))throw new Error('That system command is blocked by JARVIS safety policy.');
   return runPS(c,{timeout:20000});
 }
-module.exports={openApp,closeApp,listProcesses,setVolume,key,typeText,hotkey,mouse,screenshot,openUrl,browserSearch,spotifyPlay,fileAction,shell,discoverApplication,discoverStartApp,discoverEpicGame,discoverModrinthProfile,IS_WIN};
+module.exports={openApp,closeApp,listProcesses,setVolume,key,typeText,hotkey,mouse,screenshot,openUrl,browserSearch,spotifyPlay,fileAction,shell,discoverApplication,discoverStartApp,discoverEpicGame,discoverModrinthProfile,IS_WIN,KNOWN_APPS,WEB_ALIASES};

@@ -14,6 +14,7 @@ const serverGraph = require('./serverGraph');
 const { validatePlan, summarize: summarizePlan } = require('./planValidator');
 const pc = require('./pcTools');
 const pcBridge = require('./pcBridge');
+const { WEB_ALIASES, KNOWN_APPS, APP_ALIASES } = require('./pcCatalog');
 
 const MAX_STEPS = 20;
 const MAX_AGENT_LOOPS = Math.min(Math.max(Number(process.env.JARVIS_AGENT_LOOPS || 2), 1), 4);
@@ -41,8 +42,9 @@ function deterministicAgentPlan(prompt) {
   // actions for the dedicated, allowlisted PC tools.
   {
     const steps=[];
-    const hasPC=/\b(?:open|launch|start|run|play|put|turn|set|make|get|fire|boot)\b/i.test(raw) &&
-      /\b(?:youtube|spotify|brave|chrome|edge|minecraft|volume|browser|music|rocket\s*league|epic(?:\s+games)?|modrinth|discord|steam|obs|notepad|calculator|calc|explorer|code)\b/i.test(raw);
+    const catalogTerms=[...Object.keys(WEB_ALIASES),...KNOWN_APPS,...Object.keys(APP_ALIASES),'volume','browser','music'].sort((a,b)=>b.length-a.length);
+    const catalogPattern=new RegExp('(?:^|\\s|[,;])(?:'+catalogTerms.map(x=>String(x).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|')+')(?:$|\\s|[,;.!?])','i');
+    const hasPC=/\b(?:open|launch|start|run|play|put|turn|set|make|get|fire|boot|go to|visit)\b/i.test(raw) && catalogPattern.test(raw);
     if(hasPC){
       const pushApp=(name)=>{ if(!steps.some(x=>x.action==='pc_open_app'&&x.name===name)) steps.push(base('pc_open_app',{name})); };
       // Browser intent: "open youtube" means navigate to YouTube, not a search.
@@ -64,6 +66,13 @@ function deterministicAgentPlan(prompt) {
         const re=new RegExp('\\b(?:open|launch|start|go to)\\s+'+name.replace(/ /g,'\\s+')+'\\b','i');
         if(re.test(raw)) steps.push(base('pc_open_url',{name:url,reason:'brave'}));
       }
+      // Broad website catalog: navigation is always treated as a URL intent first.
+      // This keeps hundreds of common sites from falling through to conversational AI.
+      for(const [site,url] of Object.entries(WEB_ALIASES)){
+        const escaped=site.replace(/[.*+?^${}()|[\]\\]/g,'\\$&').replace(/\s+/g,'\\s+');
+        const re=new RegExp('\\b(?:open|launch|start|go to|visit)\\s+'+escaped+'(?:\\s+in\\s+(?:brave|chrome|edge|firefox|opera))?\\b','i');
+        if(re.test(raw) && !steps.some(x=>x.action==='pc_open_url'&&x.name===url)) steps.push(base('pc_open_url',{name:url,reason:'brave'}));
+      }
       // Stop a browser-search query at the next explicit action, including comma-separated
       // commands. Without this, a sentence like "search YouTube for Minecraft PvP, put on
       // Spotify, set the volume to 50" gets swallowed as one enormous search query.
@@ -82,7 +91,9 @@ function deterministicAgentPlan(prompt) {
       for(const phrase of appWords){
         const m=phrase.match(/(?:open|launch|start|run|play|fire up|get)\s+(.+)/i);
         const candidate=m?.[1]?.trim();
-        if(candidate && !/^(youtube|yt|spotify|brave|brave browser|chrome|google chrome|edge|microsoft edge|rocket league|modrinth|modrinth app|epic|epic games|epic games launcher|minecraft|mc|minecraft launcher|gmail|google mail|tiktok|instagram|facebook|twitch|reddit|google)$/i.test(candidate) && !/^(the )?(volume|music|browser)$/i.test(candidate)) pushApp(candidate);
+        const isCatalogWeb=Object.keys(WEB_ALIASES).some(x=>x.toLowerCase()===String(candidate||'').toLowerCase());
+        const isKnownApp=KNOWN_APPS.some(x=>x.toLowerCase()===String(candidate||'').toLowerCase()) || Object.keys(APP_ALIASES).some(x=>x.toLowerCase()===String(candidate||'').toLowerCase());
+        if(candidate && !isCatalogWeb && (isKnownApp || candidate.length<=60) && !/^(the )?(volume|music|browser)$/i.test(candidate)) pushApp(candidate);
       }
       const play=raw.match(/\b(?:play|put on)\s+(.+?)(?=\s*(?:,|;)\s*(?:(?:and|then)\s+)?(?:set|make|run|open|launch|start|put\s+on)\b|\s+(?:and|then)\s+(?:set|make|run|open|launch|start)\b|$)/i);
       // "put on Spotify" means launch Spotify, not search Spotify for a track
@@ -360,7 +371,7 @@ async function executePlan({message,plan,config,saveConfig,dryRun=false}) {
   const failed=outputs.find(x=>!x.ok||x.verified===false);
   journal.record(config,{action:'PLAN_EXECUTION',actorId:message.author.id,reason:plan.summary,before:null,after:{steps:success,total:plan.steps.length,verified},reversible:false,metadata:{summary:plan.summary,steps:plan.steps.map(s=>s.action)}});
   saveConfig(message.guild.id,config);
-  return {handled:true,text:`**JARVIS V17.1 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
+  return {handled:true,text:`**JARVIS V17.3 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
 }
 
 async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {

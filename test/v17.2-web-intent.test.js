@@ -1,0 +1,11 @@
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const agent = fs.readFileSync(path.join(__dirname,'..','src/core','agent.js'),'utf8');
+const ai = fs.readFileSync(path.join(__dirname,'..','src','ai','ai.js'),'utf8');
+assert.match(agent, /gmail:'https:\\/\\/mail\\.google\\.com\\//);
+assert.match(agent, /tiktok:'https:\\/\\/www\\.tiktok\\.com\\//);
+assert.match(agent, /gmail\\|google\\s\+mail\\|tiktok/);
+assert.match(agent, /JARVIS V17\.2 EXECUTION/);
+assert.match(ai, /ALWAYS use pc_open_url for known sites/);
+console.log('V17.2 web intent regression checks passed');
