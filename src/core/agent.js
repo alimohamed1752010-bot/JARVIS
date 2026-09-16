@@ -25,7 +25,7 @@ const { CREATOR_ID } = require('./identity');
 // The AI planner remains the primary natural-language planner, but a temporary
 // model failure must not turn a clearly structured request into "no valid plan".
 function deterministicAgentPlan(prompt) {
-  const raw=String(prompt||'').replace(/^jarvis\b[,:!\s-]*/i,'').trim();
+  const raw=String(prompt||'').replace(/^(?:(?:yo|hey|hi|ok|okay)\s+)?jarvis\b[,:!\s-]*/i,'').trim().replace(/^(?:yo\s+)?(?:get\s+everything\s+ready|everything\s+ready)[.!,:;\s-]*/i,'').trim();
   if(!raw)return null;
   const base=(action,extra={})=>({action,targets:[],excludeTargets:[],source:'',destination:'',role:'',channel:'',parent:'',channelType:'text',name:'',permissionChanges:[],reason:'Owner-directed JARVIS action',durationMs:600000,...extra});
   const previewMatch=raw.match(/^(?:preview|simulate|dry run|dry-run)\s+(.+)$/i);
@@ -360,13 +360,13 @@ async function executePlan({message,plan,config,saveConfig,dryRun=false}) {
   const failed=outputs.find(x=>!x.ok||x.verified===false);
   journal.record(config,{action:'PLAN_EXECUTION',actorId:message.author.id,reason:plan.summary,before:null,after:{steps:success,total:plan.steps.length,verified},reversible:false,metadata:{summary:plan.summary,steps:plan.steps.map(s=>s.action)}});
   saveConfig(message.guild.id,config);
-  return {handled:true,text:`**JARVIS V16.9 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
+  return {handled:true,text:`**JARVIS V17.1 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
 }
 
 async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
   const isOwner=Boolean(CREATOR_ID && String(message.author.id)===CREATOR_ID);
   if(!isOwner) return {handled:false};
-  const raw=String(prompt||'').replace(/^jarvis\b[,:!\s-]*/i,'').trim();
+  const raw=String(prompt||'').replace(/^(?:(?:yo|hey|hi|ok|okay)\s+)?jarvis\b[,:!\s-]*/i,'').trim().replace(/^(?:yo\s+)?(?:get\s+everything\s+ready|everything\s+ready)[.!,:;\s-]*/i,'').trim();
   if(!raw) return {handled:false};
   // AI-FIRST ARCHITECTURE: every JARVIS request reaches the AI planner before
   // any regex/deterministic handler. Legacy parsers are emergency fallbacks only.
