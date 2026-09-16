@@ -49,8 +49,11 @@ function deterministicAgentPlan(prompt) {
       if(/\b(?:open|launch|start|go to)\s+youtube\b/i.test(raw)) {
         steps.push(base('pc_open_url',{name:'https://www.youtube.com/'}));
       }
-      const search=raw.match(/(?:search|look\s+up|find)\s+(?:youtube\s+)?(?:for\s+)?(.+?)(?=\s+(?:and|then)\s+(?:open|launch|start|play|set|make|run)\b|$)/i);
-      if(search && search[1].trim() && !/^youtube$/i.test(search[1].trim())) steps.push(base('pc_browser_search',{name:search[1].trim(),reason:'brave'}));
+      // Stop a browser-search query at the next explicit action, including comma-separated
+      // commands. Without this, a sentence like "search YouTube for Minecraft PvP, put on
+      // Spotify, set the volume to 50" gets swallowed as one enormous search query.
+      const search=raw.match(/(?:search|look\s+up|find)\s+(?:youtube\s+)?(?:for\s+)?(.+?)(?=\s*(?:,|;)\s*(?:(?:and|then)\s+)?(?:open|launch|start|play|put\s+on|set|make|run|fire\s+up)\b|\s+(?:and|then)\s+(?:open|launch|start|play|put\s+on|set|make|run|fire\s+up)\b|$)/i);
+      if(search && search[1].trim() && !/^youtube$/i.test(search[1].trim())) steps.push(base('pc_browser_search',{name:search[1].trim().replace(/[\s,;]+$/,''),reason:'brave'}));
       if(/\b(?:open|launch|start|run|get|fire up)\s+(?:brave|brave browser)\b/i.test(raw)) pushApp('brave');
       if(/\b(?:open|launch|start|run|get|fire up)\s+(?:chrome|google chrome)\b/i.test(raw)) pushApp('chrome');
       if(/\b(?:open|launch|start|run|get|fire up)\s+(?:edge|microsoft edge)\b/i.test(raw)) pushApp('msedge');
@@ -66,8 +69,10 @@ function deterministicAgentPlan(prompt) {
         const candidate=m?.[1]?.trim();
         if(candidate && !/^(youtube|yt|spotify|brave|brave browser|chrome|google chrome|edge|microsoft edge|rocket league|modrinth|modrinth app|epic|epic games|epic games launcher|minecraft|mc|minecraft launcher)$/i.test(candidate) && !/^(the )?(volume|music|browser)$/i.test(candidate)) pushApp(candidate);
       }
-      const play=raw.match(/\b(?:play|put on)\s+(.+?)(?=\s+(?:and|then)\s+(?:set|make)\s+(?:the\s+)?volume|\s+(?:and|then)\s+(?:run|open|launch|start)\s+(?:minecraft|rocket\s*league)\b|$)/i);
-      if(play && /\bspotify\b/i.test(raw)) steps.push(base('pc_spotify_play',{name:play[1].trim()}));
+      const play=raw.match(/\b(?:play|put on)\s+(.+?)(?=\s*(?:,|;)\s*(?:(?:and|then)\s+)?(?:set|make|run|open|launch|start|put\s+on)\b|\s+(?:and|then)\s+(?:set|make|run|open|launch|start)\b|$)/i);
+      // "put on Spotify" means launch Spotify, not search Spotify for a track
+      // literally named "Spotify". Humanity has suffered enough from that bug.
+      if(play && /\bspotify\b/i.test(raw) && !/^spotify$/i.test(play[1].trim())) steps.push(base('pc_spotify_play',{name:play[1].trim().replace(/[\s,;]+$/,'')}));
       const vol=raw.match(/(?:set|make)\s+(?:the\s+)?volume\s+(?:to\s+)?(\d{1,3})\s*%?/i);
       if(vol) steps.push(base('pc_volume',{durationMs:Math.max(0,Math.min(100,Number(vol[1])))}));
       if(/\b(?:run|open|launch|start|play|fire up|get)\s+(?:minecraft|mc|minecraft java)\b/i.test(raw)) pushApp('Minecraft');
@@ -340,7 +345,7 @@ async function executePlan({message,plan,config,saveConfig,dryRun=false}) {
   const failed=outputs.find(x=>!x.ok||x.verified===false);
   journal.record(config,{action:'PLAN_EXECUTION',actorId:message.author.id,reason:plan.summary,before:null,after:{steps:success,total:plan.steps.length,verified},reversible:false,metadata:{summary:plan.summary,steps:plan.steps.map(s=>s.action)}});
   saveConfig(message.guild.id,config);
-  return {handled:true,text:`**JARVIS V16.7 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
+  return {handled:true,text:`**JARVIS V16.8 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
 }
 
 async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {

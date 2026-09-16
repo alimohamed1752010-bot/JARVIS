@@ -178,6 +178,14 @@ async function openApp(app,args=[]){
     if(appEntry.ambiguous)throw new Error('Multiple Epic Games Launcher entries were found.');
     return startStartMenuApp(appEntry.AppID,args);
   }
+  // Browsers get the same dynamic executable discovery used by URL/search actions.
+  // Their Start Menu registration can be missing or oddly named even when the browser
+  // itself is installed, so do not make an explicit "open Brave" depend on StartApps.
+  if(a==='brave'||a==='chrome'||a==='msedge'){
+    const executable=await findBrowserExecutable(a);
+    await spawnApp(executable,args);
+    return {started:true,via:'BrowserExecutableDiscovery',browser:a,executable};
+  }
   // For ordinary apps, prefer the actual Start Menu registration. This is what makes
   // arbitrary installed apps work without a hardcoded executable path.
   const start=await discoverStartApp(requested);
