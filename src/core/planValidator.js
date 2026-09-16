@@ -4,7 +4,7 @@ const { normalizePermission } = require('./discordActionUtils');
 
 const ACTIONS = new Set([
   'server_analyze','server_relationship','server_investigate','server_snapshot','server_audit','server_restore','server_diff','undo','autopilot','history','incident_report','case_explain','member_profile','health_score','schedule_action','schedule_list','schedule_cancel','watch','watch_off',
-  'pc_open_app','pc_close_app','pc_processes','pc_system_status','pc_active_window','pc_network_status','pc_state','pc_volume','pc_key','pc_mouse','pc_hotkey','pc_type','pc_screenshot','pc_open_url','pc_browser_search','pc_spotify_play','pc_shell','pc_file_read','pc_file_write','pc_file_copy','pc_file_move','pc_file_delete','voicemove','voicedisconnect','voicemute','voiceunmute','voicedeafen','voiceundeafen',
+  'pc_open_app','pc_close_app','pc_processes','pc_system_status','pc_active_window','pc_network_status','pc_state','pc_volume','pc_key','pc_mouse','pc_hotkey','pc_type','pc_screenshot','pc_open_url','pc_browser_search','pc_spotify_play','pc_spotify_control','pc_shell','pc_file_read','pc_file_write','pc_file_copy','pc_file_move','pc_file_delete','voicemove','voicedisconnect','voicemute','voiceunmute','voicedeafen','voiceundeafen',
   'textmute','textunmute','timeout','untimeout','kick','ban','warn',
   'role_permissions','role_edit','role_add','role_remove','role_create','role_delete',
   'channel_edit','channel_create','channel_delete','channel_permissions','member_nickname'
@@ -32,14 +32,14 @@ function cleanPlan(plan){
 function validateStep(step, guild){
   const errors=[]; const warnings=[];
   if (!ACTIONS.has(step.action)) errors.push(`Unsupported action: ${step.action||'empty'}`);
-  if (['pc_open_app','pc_close_app','pc_processes','pc_system_status','pc_active_window','pc_network_status','pc_state','pc_volume','pc_key','pc_mouse','pc_hotkey','pc_type','pc_screenshot','pc_open_url','pc_browser_search','pc_spotify_play','pc_shell','pc_file_read','pc_file_write','pc_file_copy','pc_file_move','pc_file_delete','voicemove','channel_create','role_create','channel_edit','channel_delete','role_delete','role_permissions','channel_permissions','role_add','role_remove','member_nickname'].includes(step.action)) {
+  if (['pc_open_app','pc_close_app','pc_processes','pc_system_status','pc_active_window','pc_network_status','pc_state','pc_volume','pc_key','pc_mouse','pc_hotkey','pc_type','pc_screenshot','pc_open_url','pc_browser_search','pc_spotify_play','pc_spotify_control','pc_shell','pc_file_read','pc_file_write','pc_file_copy','pc_file_move','pc_file_delete','voicemove','channel_create','role_create','channel_edit','channel_delete','role_delete','role_permissions','channel_permissions','role_add','role_remove','member_nickname'].includes(step.action)) {
     if (['role_create','channel_create','channel_edit','channel_delete','role_delete','role_permissions','channel_permissions','role_add','role_remove'].includes(step.action) && !step.role && ['role_permissions','role_edit','role_add','role_remove','role_delete'].includes(step.action)) errors.push('Role is missing.');
   }
   if (['voicemove','voicedisconnect','voicemute','voiceunmute','voicedeafen','voiceundeafen','textmute','textunmute','timeout','untimeout','kick','ban','warn','role_add','role_remove','member_nickname'].includes(step.action) && !step.targets.length) errors.push('Target is missing.');
   if (['voicemove'].includes(step.action) && !step.destination) errors.push('Destination voice channel is missing.');
   if (step.action==='pc_open_app' && !step.name) errors.push('Application name is missing.');
   if (['pc_browser_search','pc_spotify_play'].includes(step.action) && !step.name) errors.push('Search/query is missing.');
-  if (['pc_key','pc_mouse','pc_hotkey','pc_screenshot','pc_open_url','pc_browser_search','pc_spotify_play','pc_file_read','pc_file_write','pc_file_copy','pc_file_move','pc_file_delete'].includes(step.action) && !step.name) errors.push('PC action target is missing.');
+  if (['pc_key','pc_mouse','pc_hotkey','pc_screenshot','pc_open_url','pc_browser_search','pc_spotify_play','pc_spotify_control','pc_file_read','pc_file_write','pc_file_copy','pc_file_move','pc_file_delete'].includes(step.action) && !step.name) errors.push('PC action target is missing.');
   if (step.action==='pc_type' && !step.reason) errors.push('Text to type is missing.');
   if (step.action==='pc_shell' && !step.reason) errors.push('Shell command is missing.');
   if (step.action==='pc_file_write' && !step.reason) errors.push('File content is missing.');

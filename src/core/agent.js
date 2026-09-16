@@ -109,6 +109,11 @@ function deterministicAgentPlan(prompt) {
         const isSpotifyTrackPhrase=/^(?:.+?)\s+(?:on|in)\s+spotify$/i.test(String(candidate||''));
         if(candidate && !isSpotifyTrackPhrase && !isCatalogWeb && (isKnownApp || candidate.length<=60) && !/^(the )?(volume|music|browser)$/i.test(candidate)) pushApp(candidate);
       }
+      // Spotify transport controls. These are deterministic because 'pause music'
+      // is not a philosophical question and does not need an AI committee meeting.
+      if(/\b(?:pause|stop)\s+(?:the\s+)?(?:music|song|track|spotify)\b/i.test(raw) && !/\b(?:pause|stop)\s+(?:the\s+)?(?:download|recording)\b/i.test(raw)) steps.push(base('pc_spotify_control',{name:'pause'}));
+      else if(/\b(?:resume|continue)\s+(?:the\s+)?(?:music|song|track|spotify)\b/i.test(raw)) steps.push(base('pc_spotify_control',{name:'play'}));
+      else if(/\b(?:play|start)\s+(?:the\s+)?(?:music|song|track|spotify)\b/i.test(raw) && !/\b(?:play|start)\s+.+\s+(?:on|in)\s+spotify\b/i.test(raw)) steps.push(base('pc_spotify_control',{name:'play'}));
       const play=raw.match(/\b(?:play|put on)\s+(.+?)(?=\s*(?:,|;)\s*(?:(?:and|then)\s+)?(?:set|make|run|open|launch|start|put\s+on)\b|\s+(?:and|then)\s+(?:set|make|run|open|launch|start)\b|$)/i);
       // "put on Spotify" means launch Spotify, not search Spotify for a track
       // literally named "Spotify". Humanity has suffered enough from that bug.
@@ -448,7 +453,7 @@ async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
   // one action when the model under-plans it. Deterministic actions are only
   // dedicated, allowlisted PC actions and are merged without duplicates.
   if(deterministicPlan?.steps?.length) {
-    const pcActions=new Set(['pc_open_app','pc_open_url','pc_browser_search','pc_spotify_play','pc_volume','pc_processes','pc_system_status','pc_active_window','pc_network_status','pc_state']);
+    const pcActions=new Set(['pc_open_app','pc_open_url','pc_browser_search','pc_spotify_play','pc_spotify_control','pc_volume','pc_processes','pc_system_status','pc_active_window','pc_network_status','pc_state']);
     if(!rawPlan) rawPlan=deterministicPlan;
     else if(rawPlan.steps?.length) {
       const key=(x)=>`${String(x.action).toLowerCase()}|${String(x.name||'').trim().toLowerCase()}`;

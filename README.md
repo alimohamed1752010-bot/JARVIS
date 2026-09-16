@@ -53,4 +53,4 @@ V18 does **not** claim capabilities it cannot reliably perform. A screenshot can
 
 This is intentional: a smaller set of verified capabilities is better than a chatbot confidently reporting that it clicked something it never touched.
 
-- V18.5 fixes natural Spotify requests such as “play Into It on Spotify” so the full phrase is not treated as an application name.
+- V18.6 fixes natural Spotify requests such as “play Into It on Spotify” so the full phrase is not treated as an application name.

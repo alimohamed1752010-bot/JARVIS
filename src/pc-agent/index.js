@@ -44,6 +44,7 @@ async function execute(action, step) {
   if (action === 'pc_screenshot') return { text: `Screenshot saved to ${await pc.screenshot(step.name)}` };
   if (action === 'pc_open_url') return { text: await pc.openUrl(step.name, step.reason || 'brave') };
   if (action === 'pc_spotify_play') return { text: await pc.spotifyPlay(step.name) };
+  if (action === 'pc_spotify_control') return { text: await pc.spotifyControl(step.name || 'toggle') };
   if (action === 'pc_browser_search') { const r=await pc.browserSearch(step.name, step.reason || 'brave'); return { text:r.text || `Opened YouTube search for ${step.name}.`, details:r.details }; }
   if (action.startsWith('pc_file_')) return { text: await pc.fileAction(action.replace('pc_file_', ''), step.name, step.reason) };
   if (action === 'pc_shell') return { text: await pc.shell(step.reason) };

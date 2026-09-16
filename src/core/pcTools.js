@@ -346,23 +346,76 @@ async function openBrowserUrl(url,browser='brave') {
   return {started:true,browser:normalizeApp(browser),url:u,executable};
 }
 
+async function spotifySession(){
+  ensureWindows();
+  const ps=`$ErrorActionPreference='SilentlyContinue'; $mgr=[Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager,Windows,ContentType=WindowsRuntime]::RequestAsync().GetAwaiter().GetResult(); $sessions=$mgr.GetSessions(); $rows=@(); foreach($s in $sessions){ try { $p=$s.GetMediaPropertiesAsync().GetAwaiter().GetResult(); $rows += [PSCustomObject]@{Source=[string]$s.SourceAppUserModelId;Title=[string]$p.Title;Artist=[string]$p.Artist;Status=[string]$s.GetPlaybackInfo().PlaybackStatus} } catch {} }; $rows | ConvertTo-Json -Compress -Depth 3`;
+  const out=await runPS(ps,{timeout:10000}).catch(()=> '');
+  if(!out)return [];
+  try { const parsed=JSON.parse(out); return Array.isArray(parsed)?parsed:[parsed]; } catch { return []; }
+}
+
+function spotifyMatchTitle(title,query){
+  const a=String(title||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  const b=String(query||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  if(!a||!b)return false;
+  return a===b || a.includes(b) || b.includes(a);
+}
+
 async function spotifyPlay(query) {
   const q=String(query||'').trim(); if(!q) throw new Error('Spotify search is empty.');
   await openApp('spotify');
-  await new Promise(r=>setTimeout(r,1400));
-  await hotkey('CTRL+K').catch(()=>{});
-  await new Promise(r=>setTimeout(r,250));
+  await new Promise(r=>setTimeout(r,1800));
+  await hotkey('CTRL+K');
+  await new Promise(r=>setTimeout(r,300));
   await typeText(q);
-  await new Promise(r=>setTimeout(r,700));
+  await new Promise(r=>setTimeout(r,900));
   await key('{ENTER}');
-  await new Promise(r=>setTimeout(r,1200));
-  // After search, move focus to the first result and request playback.
-  // Spotify client layouts can vary, so the result is phrased as a playback request.
-  await key('{TAB}').catch(()=>{});
-  await new Promise(r=>setTimeout(r,200));
-  await key('{ENTER}').catch(()=>{});
+  await new Promise(r=>setTimeout(r,1400));
+
+  // Spotify's desktop UI changes occasionally, because apparently buttons need
+  // seasonal fashion updates. Try a small number of keyboard paths and verify
+  // through Windows' media session before claiming that anything actually played.
+  for(let attempt=0; attempt<6; attempt++){
+    const sessions=await spotifySession();
+    const spotify=sessions.find(x=>/spotify/i.test(String(x.Source||'')));
+    if(spotify && spotifyMatchTitle(spotify.Title,q) && /playing/i.test(String(spotify.Status||''))) {
+      return `Playing “${spotify.Title}” on Spotify${spotify.Artist?` by ${spotify.Artist}`:''}.`;
+    }
+    if(spotify && spotifyMatchTitle(spotify.Title,q) && /paused/i.test(String(spotify.Status||''))) {
+      await hotkey('SPACE');
+      await new Promise(r=>setTimeout(r,800));
+      const after=await spotifySession();
+      const s=after.find(x=>/spotify/i.test(String(x.Source||'')));
+      if(s && spotifyMatchTitle(s.Title,q) && /playing/i.test(String(s.Status||''))) return `Playing “${s.Title}” on Spotify${s.Artist?` by ${s.Artist}`:''}.`;
+    }
+    await hotkey('TAB');
+    await new Promise(r=>setTimeout(r,180));
+    await hotkey('ENTER');
+    await new Promise(r=>setTimeout(r,900));
+  }
+  throw new Error(`Spotify opened and searched for “${q}”, but playback could not be verified.`);
+}
+
+async function spotifyControl(mode='toggle'){
+  const wanted=String(mode||'toggle').toLowerCase();
+  if(!['play','pause','toggle'].includes(wanted)) throw new Error('Spotify control must be play, pause, or toggle.');
+  const processes=await runPS("Get-Process -Name 'Spotify' -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object {$_.ProcessName}").catch(()=> '');
+  if(!processes) throw new Error('Spotify is not running.');
+  const sessions=await spotifySession();
+  const spotify=sessions.find(x=>/spotify/i.test(String(x.Source||'')));
+  const status=String(spotify?.Status||'').toLowerCase();
+  if(wanted==='play' && /playing/i.test(status)) return 'Spotify is already playing.';
+  if(wanted==='pause' && /paused/i.test(status)) return 'Spotify is already paused.';
+  // Windows Media Play/Pause is app-agnostic, so only issue it when Spotify is
+  // the detected media session. This avoids randomly controlling another player.
+  if(!spotify) throw new Error('Spotify is open, but its active media session could not be detected.');
+  await hotkey('MEDIA_PLAY_PAUSE').catch(async()=>{ await key('{MEDIA_PLAY_PAUSE}'); });
   await new Promise(r=>setTimeout(r,700));
-  return `Spotify search opened for “${q}” and playback was requested.`;
+  const after=(await spotifySession()).find(x=>/spotify/i.test(String(x.Source||'')));
+  const afterStatus=String(after?.Status||'').toLowerCase();
+  if(wanted==='play' && !/playing/i.test(afterStatus)) throw new Error('Spotify did not enter playback.');
+  if(wanted==='pause' && !/paused/i.test(afterStatus)) throw new Error('Spotify did not pause.');
+  return /playing/i.test(afterStatus)?'Spotify playback resumed.':'Spotify playback paused.';
 }
 
 async function openUrl(url,browser='brave'){
@@ -411,4 +464,4 @@ async function shell(command){
   const c=String(command||'').trim(); if(!c)throw new Error('Command is empty.'); if(c.length>2000)throw new Error('Command too long.'); if(BLOCKED.test(c))throw new Error('That system command is blocked by JARVIS safety policy.');
   return runPS(c,{timeout:20000});
 }
-module.exports={openApp,closeApp,listProcesses,setVolume,key,typeText,hotkey,mouse,screenshot,openUrl,browserSearch,spotifyPlay,fileAction,shell,systemStatus,activeWindow,networkStatus,pcState,discoverApplication,discoverStartApp,discoverEpicGame,discoverModrinthProfile,IS_WIN,KNOWN_APPS,WEB_ALIASES};
+module.exports={openApp,closeApp,listProcesses,setVolume,key,typeText,hotkey,mouse,screenshot,openUrl,browserSearch,spotifyPlay,spotifyControl,fileAction,shell,systemStatus,activeWindow,networkStatus,pcState,discoverApplication,discoverStartApp,discoverEpicGame,discoverModrinthProfile,IS_WIN,KNOWN_APPS,WEB_ALIASES};
