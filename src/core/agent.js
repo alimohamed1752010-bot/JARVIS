@@ -212,6 +212,46 @@ async function resolveDestination(guild, query, voiceOnly=false) {
   return r.channel;
 }
 
+function formatPCObservation(action, text, details) {
+  if (action === 'pc_active_window' && details) {
+    const title = String(details.Title || '').trim() || '(untitled)';
+    const process = String(details.Process || '').trim() || 'unknown';
+    const pid = Number(details.PID || 0);
+    return `🪟 **Active Window**\n• **App:** ${process}\n• **Window:** ${title}\n• **PID:** ${pid || 'unknown'}`;
+  }
+  if (action === 'pc_system_status' && details) {
+    const cpu = Number(details.cpuPercent);
+    const used = Number(details.ramUsedGB);
+    const total = Number(details.ramTotalGB);
+    const ramPct = total > 0 ? Math.round((used / total) * 100) : null;
+    const disks = Array.isArray(details.disks) ? details.disks : [];
+    const diskText = disks.length ? disks.map(d => `• **${d.Drive}:** ${Number(d.FreeGB).toFixed(1)} GB free / ${Number(d.SizeGB).toFixed(1)} GB`).join('\n') : '• No local disks reported';
+    return `🖥️ **PC Status**\n• **Computer:** ${details.computer || 'unknown'}\n• **Windows:** ${details.windows || 'unknown'}\n• **CPU:** ${Number.isFinite(cpu) ? `${cpu}%` : 'unknown'}\n• **RAM:** ${Number.isFinite(used) && Number.isFinite(total) ? `${used.toFixed(1)} / ${total.toFixed(1)} GB${ramPct !== null ? ` (${ramPct}%)` : ''}` : 'unknown'}\n**Storage**\n${diskText}`;
+  }
+  if (action === 'pc_processes') {
+    const raw = String(text || '').trim();
+    const lines = raw.split(/\r?\n/).map(x => x.trimEnd()).filter(Boolean);
+    const rows = lines.filter(x => !/^Name\s+Id\s+CPU$/i.test(x) && !/^-{3,}/.test(x));
+    const cleaned = rows.slice(0, 15).map(x => `• ${x.trim()}`);
+    return `⚙️ **Top Running Processes**\n${cleaned.length ? cleaned.join('\n') : '• No process data returned.'}`;
+  }
+  if (action === 'pc_state' && details) {
+    const st = details.status || {};
+    const win = details.activeWindow || {};
+    const cpu = Number(st.cpuPercent), used = Number(st.ramUsedGB), total = Number(st.ramTotalGB);
+    const ramPct = total > 0 ? Math.round((used / total) * 100) : null;
+    const disks = Array.isArray(st.disks) ? st.disks : [];
+    const diskText = disks.length ? disks.map(d => `${d.Drive}: ${Number(d.FreeGB).toFixed(1)} GB free`).join(' • ') : 'none reported';
+    return `🖥️ **PC Status Report**\n• **Computer:** ${st.computer || 'unknown'}\n• **CPU:** ${Number.isFinite(cpu) ? `${cpu}%` : 'unknown'}\n• **RAM:** ${Number.isFinite(used) && Number.isFinite(total) ? `${used.toFixed(1)} / ${total.toFixed(1)} GB${ramPct !== null ? ` (${ramPct}%)` : ''}` : 'unknown'}\n• **Storage:** ${diskText}\n• **Active Window:** ${win.Process || 'unknown'}${win.Title ? ` — ${win.Title}` : ''}`;
+  }
+  if (action === 'pc_network_status' && details) {
+    const adapters = Array.isArray(details.Adapters) ? details.Adapters : [];
+    const interfaces = Array.isArray(details.Interfaces) ? details.Interfaces : [];
+    return `🌐 **Network Status**\n**Adapters**\n${adapters.length ? adapters.map(a => `• ${a.Name || 'unknown'} — ${a.Status || 'unknown'}${a.LinkSpeed ? ` (${a.LinkSpeed})` : ''}`).join('\n') : '• None reported'}\n**Connections**\n${interfaces.length ? interfaces.map(i => `• ${i.InterfaceAlias || 'unknown'} — ${i.IPv4 || 'no IPv4'} → ${i.Gateway || 'no gateway'}`).join('\n') : '• None reported'}`;
+  }
+  return text;
+}
+
 async function runStep({message,step,config,saveConfig,dryRun=false}) {
   const action=step.action;
   if (action.startsWith('pc_')) {
@@ -219,7 +259,7 @@ async function runStep({message,step,config,saveConfig,dryRun=false}) {
     // Railway is the brain; Windows is the hands. Never try to run PC tools on Railway.
     if (!pcBridge.status().connected) throw new Error('PC agent is offline. Start START-JARVIS-PC.bat on the Windows PC.');
     const result=await pcBridge.execute(action,step,45000);
-    return {ok:true,text:result?.text||`Executed **${action}** on the PC.`,details:result?.details};
+    return {ok:true,text:formatPCObservation(action,result?.text||`Executed **${action}** on the PC.`,result?.details),details:result?.details};
   }
   if(action==='history') { const superior=require('../systems/superior'); return {ok:true,text:superior.formatHistory(config,step.name||10)}; }
   if(action==='incident_report') { const superior=require('../systems/superior'); return {ok:true,text:superior.incidentReport(config,message.guild)}; }
@@ -379,7 +419,7 @@ async function executePlan({message,plan,config,saveConfig,dryRun=false}) {
   const failed=outputs.find(x=>!x.ok||x.verified===false);
   journal.record(config,{action:'PLAN_EXECUTION',actorId:message.author.id,reason:plan.summary,before:null,after:{steps:success,total:plan.steps.length,verified},reversible:false,metadata:{summary:plan.summary,steps:plan.steps.map(s=>s.action)}});
   saveConfig(message.guild.id,config);
-  return {handled:true,text:`**JARVIS V18.1 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
+  return {handled:true,text:`**JARVIS V18.2 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
 }
 
 async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
