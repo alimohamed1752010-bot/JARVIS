@@ -21,7 +21,7 @@ function cleanPlan(plan){
     excludeTargets: Array.isArray(s?.excludeTargets) ? s.excludeTargets.map(cleanRef).filter(Boolean).slice(0,MAX_TARGETS) : [],
     source: cleanRef(s?.source), destination: cleanRef(s?.destination), role: cleanRef(s?.role),
     channel: cleanRef(s?.channel), parent: cleanRef(s?.parent), channelType: cleanRef(s?.channelType || 'text').toLowerCase(), createParentIfMissing:Boolean(s?.createParentIfMissing), name: cleanRef(s?.name).slice(0,100), color: cleanRef(s?.color).slice(0,20), hoist: typeof s?.hoist==='boolean'?s.hoist:null, mentionable: typeof s?.mentionable==='boolean'?s.mentionable:null, reason: cleanRef(s?.reason).slice(0,500),
-    durationMs: Math.min(Math.max(Number(s?.durationMs)||600000,1000),28*24*60*60*1000),
+    durationMs: String(s?.action||'').toLowerCase()==='pc_volume' ? Math.min(Math.max(Number(s?.durationMs ?? s?.percent ?? s?.volume ?? 50),0),100) : Math.min(Math.max(Number(s?.durationMs)||600000,1000),28*24*60*60*1000),
     caseId: String(s?.caseId||'').trim(),
     permissionChanges: Array.isArray(s?.permissionChanges) ? s.permissionChanges.map(x=>({permission:cleanRef(x?.permission),enabled:Boolean(x?.enabled)})).filter(x=>x.permission).slice(0,30) : []
   })).filter(s=>ACTIONS.has(s.action));

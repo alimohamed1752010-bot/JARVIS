@@ -340,7 +340,7 @@ async function executePlan({message,plan,config,saveConfig,dryRun=false}) {
   const failed=outputs.find(x=>!x.ok||x.verified===false);
   journal.record(config,{action:'PLAN_EXECUTION',actorId:message.author.id,reason:plan.summary,before:null,after:{steps:success,total:plan.steps.length,verified},reversible:false,metadata:{summary:plan.summary,steps:plan.steps.map(s=>s.action)}});
   saveConfig(message.guild.id,config);
-  return {handled:true,text:`**JARVIS V16.6 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
+  return {handled:true,text:`**JARVIS V16.7 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
 }
 
 async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
@@ -354,8 +354,33 @@ async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
   const session=getSession(config,message.guild.id,message.author.id)||[]; const recentContext=session.slice(-10).map(x=>`${x.role==='model'?'JARVIS':'USER'}: ${String(x.text||'').slice(0,500)}`).join('\n'); const live=await awareness.snapshot(message.guild).catch(()=>null); const liveContext=live?`LIVE SERVER CONTEXT (reference only; do not invent beyond this):\n${awareness.format(live)}`:''; const knowledge=serverKnowledge.context(config,message.guild.id); const plannerPrompt=[liveContext,knowledge,recentContext?`RECENT CONVERSATION CONTEXT:\n${recentContext}`:'',`CURRENT REQUEST:\n${raw}`].filter(Boolean).join('\n\n');
   let rawPlan=null;
   try { rawPlan=await parseAgentPlan({message,prompt:plannerPrompt}); } catch(e) { console.warn('[AI-FIRST PLANNER]',e?.message||e); }
-  // Only use the deterministic parser after the AI planner has failed.
-  if(!rawPlan && deterministicPlan) rawPlan=deterministicPlan;
+  // The AI planner is primary, but for PC intent we also reconcile its plan
+  // against a deterministic intent pass. This prevents a valid natural-language
+  // request such as "run Spotify and Rocket League" from being reduced to only
+  // one action when the model under-plans it. Deterministic actions are only
+  // dedicated, allowlisted PC actions and are merged without duplicates.
+  if(deterministicPlan?.steps?.length) {
+    const pcActions=new Set(['pc_open_app','pc_open_url','pc_browser_search','pc_spotify_play','pc_volume']);
+    if(!rawPlan) rawPlan=deterministicPlan;
+    else if(rawPlan.steps?.length) {
+      const key=(x)=>`${String(x.action).toLowerCase()}|${String(x.name||'').trim().toLowerCase()}`;
+      const rawIsPurePC=rawPlan.steps.every(x=>pcActions.has(String(x.action).toLowerCase()));
+      if(rawIsPurePC) {
+        // For a pure desktop request, the deterministic pass is the canonical
+        // ordering. The model may omit one of several requested apps; using the
+        // deterministic sequence prevents "A and B" becoming only A or B.
+        rawPlan={...deterministicPlan,summary:rawPlan.summary||deterministicPlan.summary};
+      } else {
+        const merged=[...rawPlan.steps];
+        for(const ds of deterministicPlan.steps) {
+          if(!pcActions.has(ds.action)) continue;
+          const k=key(ds);
+          if(!merged.some(ms=>key(ms)===k)) merged.push(ds);
+        }
+        rawPlan={...rawPlan,steps:merged.slice(0,MAX_STEPS),summary:rawPlan.summary||deterministicPlan.summary};
+      }
+    }
+  }
   if(rawPlan?.steps?.length===1&&rawPlan.steps[0].action==='undo'){const entry=journal.latest(config,e=>e.reversible&&e.status==='SUCCESS');if(!entry)return{handled:true,text:'I could not find a recent reversible JARVIS action, sir.'};const result=await undo({message,entry,config,saveConfig});return{handled:true,text:result.text};}
 
   // Planner failure is NOT a failed user request. A null plan means the AI

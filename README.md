@@ -1,6 +1,6 @@
-# JARVIS V16.6 — REAL AI PC + DISCORD
+# JARVIS V16.7 — REAL AI PC + DISCORD
 
-V16.6 is the natural-language PC-control build.
+V16.7 is the natural-language PC-control build.
 
 - Railway remains the AI/Discord brain.
 - Windows runs a local PC Agent over an authenticated outbound WebSocket.
