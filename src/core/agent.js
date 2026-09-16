@@ -35,19 +35,29 @@ function deterministicAgentPlan(prompt) {
   if(/^(?:incident report|security incident|show incident)$/i.test(raw)) return {summary:'Generate a JARVIS incident report.',needsConfirmation:false,steps:[base('incident_report')]};
   let sm=raw.match(/^schedule\s+(\d+)\s*(s|sec|m|min|h|hr|d|day)s?\s+(.+)$/i);
   if(sm){const mult={s:1000,sec:1000,m:60000,min:60000,h:3600000,hr:3600000,d:86400000,day:86400000}[sm[2].toLowerCase()]||60000;return {summary:`Schedule JARVIS to run: ${sm[3]}`,needsConfirmation:true,steps:[base('schedule_action',{durationMs:Math.min(Number(sm[1])*mult,7*86400000),reason:sm[3].trim()})]};}
-  // Desktop command fallback: keeps the PC agent useful even if the model is temporarily unavailable.
-  if (/\b(open|launch|start)\s+brave\b/i.test(raw) || /\bsearch\s+(?:youtube\s+)?for\s+/i.test(raw)) {
+  // Desktop command fallback: robust safety-net for natural PC requests.
+  // This must handle simple commands such as "open Brave", not only searches.
+  if (/\b(?:open|launch|start|run)\s+(?:brave|spotify|minecraft|minecraft launcher|chrome|edge|msedge|discord|notepad|calculator|calc|explorer|code|steam|task manager|settings|paint|mspaint)\b/i.test(raw) || /\bsearch\s+(?:youtube\s+)?for\s+/i.test(raw)) {
     const steps=[];
-    const search=raw.match(/(?:search\s+(?:youtube\s+)?for|youtube\s+search(?:\s+for)?)\s+(.+?)(?=\s+(?:and|then)\s+(?:open|launch|start)\s+spotify\b|\s+(?:and|then)\s+(?:set|make)\s+(?:the\s+)?volume|\s+(?:and|then)\s+(?:run|open|launch|start)\s+minecraft\b|$)/i);
+    const search=raw.match(/(?:search\s+(?:youtube\s+)?for|youtube\s+search(?:\s+for)?)\s+(.+?)(?=\s+(?:and|then)\s+(?:open|launch|start|run)\s+(?:spotify|brave|chrome|edge|msedge|minecraft)\b|\s+(?:and|then)\s+(?:set|make)\s+(?:the\s+)?volume|$)/i);
     if(search) steps.push(base('pc_browser_search',{name:search[1].trim(),reason:'brave'}));
-    if(/\b(?:open|launch|start)\s+spotify\b/i.test(raw)){
+
+    const appPattern=/(?:open|launch|start|run)\s+(brave|spotify|minecraft(?:\s+launcher)?|chrome|edge|msedge|discord|notepad|calculator|calc|explorer|code|steam|task manager|settings|paint|mspaint)\b/ig;
+    let am;
+    while((am=appPattern.exec(raw))!==null){
+      const requested=am[1].trim().toLowerCase();
+      const app=requested.startsWith('minecraft')?'minecraftlauncher':requested;
+      if(app==='spotify' && /\b(?:play|put on)\s+/.test(raw)) continue;
+      steps.push(base('pc_open_app',{name:app}));
+    }
+
+    if(/\b(?:open|launch|start|run)\s+spotify\b/i.test(raw)){
       const play=raw.match(/\b(?:play|put on)\s+(.+?)(?=\s+(?:and|then)\s+(?:set|make)\s+(?:the\s+)?volume|\s+(?:and|then)\s+(?:run|open|launch|start)\s+minecraft\b|$)/i);
-      steps.push(base('pc_open_app',{name:'spotify'}));
       if(play) steps.push(base('pc_spotify_play',{name:play[1].trim()}));
     }
     const vol=raw.match(/(?:set|make)\s+(?:the\s+)?volume\s+(?:to\s+)?(\d{1,3})\s*%?/i);
     if(vol) steps.push(base('pc_volume',{durationMs:Math.max(0,Math.min(100,Number(vol[1])))}));
-    if(/\b(?:run|open|launch|start)\s+minecraft\b/i.test(raw)) steps.push(base('pc_open_app',{name:'minecraftlauncher'}));
+
     if(steps.length) return {summary:'Execute the requested Windows desktop actions.',needsConfirmation:false,steps};
   }
   if(/^schedule\s+list$/i.test(raw)) return {summary:'List scheduled JARVIS actions.',needsConfirmation:false,steps:[base('schedule_list')]};
