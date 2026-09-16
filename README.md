@@ -74,3 +74,52 @@ Version history and release documentation are organized under [`docs/releases`](
 - [`docs/releases/readmes`](docs/releases/readmes) — version READMEs
 - [`docs/releases/patch-notes`](docs/releases/patch-notes) — patch/release/architecture notes
 - [`docs/setup`](docs/setup) — setup and deployment guides
+
+## JARVIS V16 Unified PC + Discord
+
+V16 extends the existing Discord agent into a Windows desktop agent while keeping the same AI-first planner, permissions, confirmations, execution, and verification architecture. PC actions are exposed as structured tools instead of unrestricted AI access.
+
+### Windows PC capabilities
+- Launch and close common applications
+- Open URLs in the default browser
+- Keyboard sequences, hotkeys, text typing, and mouse clicks
+- Volume control
+- Process inspection
+- Screenshots
+- Read/write/copy/move/delete files
+- PowerShell execution through a safety-filtered tool
+
+### Safety
+High-risk PC actions such as closing apps, writing/deleting/moving files, and arbitrary PowerShell commands require JARVIS confirmation. Destructive/system-level commands are blocked by the PC safety layer.
+
+### Example requests
+- `JARVIS, open Chrome`
+- `JARVIS, open https://example.com`
+- `JARVIS, take a screenshot`
+- `JARVIS, type hello world`
+- `JARVIS, show my running processes`
+- `JARVIS, open Discord then open Chrome`
+- `JARVIS, check Discord and open Chrome`
+
+JARVIS V16 is designed to run as one process on the Windows machine that hosts the Discord bot. Discord remains an interface, while Windows is an additional execution environment.
+
+
+## V16.1 real Windows PC agent
+
+Railway remains the always-on JARVIS brain. A small Node PC Agent runs on the Windows machine and maintains an outbound WebSocket connection to Railway, so Railway can safely request local actions without exposing a Windows port to the internet.
+
+### Railway variables
+- `PC_AGENT_TOKEN` — long random secret shared with the PC agent.
+- `PORT` — Railway's assigned port.
+- `DASHBOARD_ENABLED=true` is optional; the PC bridge attaches to the same HTTP server when enabled.
+
+### Windows variables
+- `JARVIS_PC_URL=wss://YOUR-RAILWAY-DOMAIN/pc`
+- `JARVIS_PC_TOKEN` — exactly the same value as Railway `PC_AGENT_TOKEN`.
+
+Run `START-JARVIS-PC.bat` on the Windows PC. It reconnects automatically if Railway or the network temporarily drops.
+
+Example natural-language command:
+`JARVIS, open Brave and search YouTube for Minecraft PvP, open Spotify and play Into It, set the volume to 50 percent, then run Minecraft.`
+
+The planner turns that into ordered PC actions. Railway never executes Windows commands itself. The local agent does.

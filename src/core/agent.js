@@ -12,6 +12,8 @@ const awareness = require('./awareness');
 const serverKnowledge = require('./serverKnowledge');
 const serverGraph = require('./serverGraph');
 const { validatePlan, summarize: summarizePlan } = require('./planValidator');
+const pc = require('./pcTools');
+const pcBridge = require('./pcBridge');
 
 const MAX_STEPS = 20;
 const MAX_AGENT_LOOPS = Math.min(Math.max(Number(process.env.JARVIS_AGENT_LOOPS || 2), 1), 4);
@@ -33,6 +35,21 @@ function deterministicAgentPlan(prompt) {
   if(/^(?:incident report|security incident|show incident)$/i.test(raw)) return {summary:'Generate a JARVIS incident report.',needsConfirmation:false,steps:[base('incident_report')]};
   let sm=raw.match(/^schedule\s+(\d+)\s*(s|sec|m|min|h|hr|d|day)s?\s+(.+)$/i);
   if(sm){const mult={s:1000,sec:1000,m:60000,min:60000,h:3600000,hr:3600000,d:86400000,day:86400000}[sm[2].toLowerCase()]||60000;return {summary:`Schedule JARVIS to run: ${sm[3]}`,needsConfirmation:true,steps:[base('schedule_action',{durationMs:Math.min(Number(sm[1])*mult,7*86400000),reason:sm[3].trim()})]};}
+  // Desktop command fallback: keeps the PC agent useful even if the model is temporarily unavailable.
+  if (/\b(open|launch|start)\s+brave\b/i.test(raw) || /\bsearch\s+(?:youtube\s+)?for\s+/i.test(raw)) {
+    const steps=[];
+    const search=raw.match(/(?:search\s+(?:youtube\s+)?for|youtube\s+search(?:\s+for)?)\s+(.+?)(?=\s+(?:and|then)\s+(?:open|launch|start)\s+spotify\b|\s+(?:and|then)\s+(?:set|make)\s+(?:the\s+)?volume|\s+(?:and|then)\s+(?:run|open|launch|start)\s+minecraft\b|$)/i);
+    if(search) steps.push(base('pc_browser_search',{name:search[1].trim(),reason:'brave'}));
+    if(/\b(?:open|launch|start)\s+spotify\b/i.test(raw)){
+      const play=raw.match(/\b(?:play|put on)\s+(.+?)(?=\s+(?:and|then)\s+(?:set|make)\s+(?:the\s+)?volume|\s+(?:and|then)\s+(?:run|open|launch|start)\s+minecraft\b|$)/i);
+      steps.push(base('pc_open_app',{name:'spotify'}));
+      if(play) steps.push(base('pc_spotify_play',{name:play[1].trim()}));
+    }
+    const vol=raw.match(/(?:set|make)\s+(?:the\s+)?volume\s+(?:to\s+)?(\d{1,3})\s*%?/i);
+    if(vol) steps.push(base('pc_volume',{durationMs:Math.max(0,Math.min(100,Number(vol[1])))}));
+    if(/\b(?:run|open|launch|start)\s+minecraft\b/i.test(raw)) steps.push(base('pc_open_app',{name:'minecraftlauncher'}));
+    if(steps.length) return {summary:'Execute the requested Windows desktop actions.',needsConfirmation:false,steps};
+  }
   if(/^schedule\s+list$/i.test(raw)) return {summary:'List scheduled JARVIS actions.',needsConfirmation:false,steps:[base('schedule_list')]};
   const sc=raw.match(/^schedule\s+cancel\s+(\S+)$/i); if(sc)return {summary:`Cancel scheduled action ${sc[1]}.`,needsConfirmation:false,steps:[base('schedule_cancel',{name:sc[1]})]};
   if(/^health(?: score)?$/i.test(raw)) return {summary:'Show the JARVIS server health score.',needsConfirmation:false,steps:[base('health_score')]};
@@ -134,6 +151,13 @@ async function resolveDestination(guild, query, voiceOnly=false) {
 
 async function runStep({message,step,config,saveConfig,dryRun=false}) {
   const action=step.action;
+  if (action.startsWith('pc_')) {
+    if (dryRun) return {ok:true,simulated:true,text:`Would execute PC action **${action}**${step.name?` → ${step.name}`:''}.`};
+    // Railway is the brain; Windows is the hands. Never try to run PC tools on Railway.
+    if (!pcBridge.status().connected) throw new Error('PC agent is offline. Start START-JARVIS-PC.bat on the Windows PC.');
+    const result=await pcBridge.execute(action,step,45000);
+    return {ok:true,text:result?.text||`Executed **${action}** on the PC.`,details:result?.details};
+  }
   if(action==='history') { const superior=require('../systems/superior'); return {ok:true,text:superior.formatHistory(config,step.name||10)}; }
   if(action==='incident_report') { const superior=require('../systems/superior'); return {ok:true,text:superior.incidentReport(config,message.guild)}; }
   if(action==='case_explain') { const superior=require('../systems/superior'); return {ok:true,text:superior.explainCase(config,step.caseId||step.name)}; }

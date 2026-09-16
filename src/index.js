@@ -22,6 +22,12 @@ const {
 // JARVIS — ADMIN ONLY EDITION
 // ============================================================
 
+if (String(process.env.DASHBOARD_ENABLED||'false').toLowerCase() !== 'true') {
+  const http = require('node:http');
+  const bridgeServer = http.createServer((req,res)=>{res.writeHead(200,{'Content-Type':'text/plain'});res.end('JARVIS PC Bridge ONLINE');});
+  bridgeServer.listen(Number(process.env.PORT||3000),()=>pcBridge.start(bridgeServer));
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -68,6 +74,7 @@ const { start: startAutopilot } = require("./systems/autopilot");
 const serverKnowledge = require('./core/serverKnowledge');
 const superior = require('./systems/superior');
 const { creatorAnswer, creatorFacts, CREATOR_ID } = require('./core/identity');
+const pcBridge = require('./core/pcBridge');
 
 // ============================================================
 // AI DIAGNOSTICS
@@ -4462,7 +4469,7 @@ client.once(
     });
     startV9Awareness(client,{getConfig,saveConfig,logEvent});
     startAutopilot(client,{getConfig,logEvent,recordKnowledge:(guildId,anomaly)=>{ try { const cfg=getConfig(guildId); serverKnowledge.recordAnomaly(cfg,guildId,anomaly); saveConfig(guildId,cfg); } catch {} }});
-    startDashboard(client,getConfig,getAnalytics,getAIStatus,voice.status());
+    startDashboard(client,getConfig,getAnalytics,getAIStatus,voice.status(),server=>pcBridge.start(server));
 
     bot.user.setPresence({
       activities: [
