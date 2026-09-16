@@ -22,8 +22,24 @@ function spawnApp(command,args=[]){
   ensureWindows();
   return new Promise((resolve,reject)=>{
     const child=spawn(command,args,{detached:true,stdio:'ignore',windowsHide:false});
-    child.once('error',reject); child.unref(); resolve();
+    let settled=false;
+    child.once('spawn',()=>{ if(!settled){settled=true; child.unref(); resolve({started:true});} });
+    child.once('error',err=>{ if(!settled){settled=true; reject(err);} });
   });
+}
+async function findStartApp(app){
+  const encoded=Buffer.from(String(app),'utf8').toString('base64');
+  const ps=`$needle=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')); $apps=Get-StartApps | Where-Object { $_.Name -like ('*'+$needle+'*') -or $_.AppID -like ('*'+$needle+'*') }; if($apps){ $app=$apps | Select-Object -First 1; Write-Output $app.AppID } else { exit 1 }`;
+  return (await runPS(ps)).trim();
+}
+async function startAppFromStartMenu(app,args=[]){
+  const appId=await findStartApp(app);
+  if(!appId) throw new Error(`Application not found in Start menu: ${app}`);
+  const encoded=Buffer.from(appId,'utf8').toString('base64');
+  const argEncoded=Buffer.from(JSON.stringify(args||[]),'utf8').toString('base64');
+  const ps=`$id=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')); $args=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${argEncoded}')); Start-Process ('shell:AppsFolder\\'+$id) -ArgumentList $args`;
+  await runPS(ps);
+  return {started:true,via:'StartMenu',appId};
 }
 function normalizeApp(app){
   const a=String(app||'').trim().toLowerCase().replace(/\.exe$/,'');
@@ -33,15 +49,35 @@ function normalizeApp(app){
 async function openApp(app,args=[]){
   const a=normalizeApp(app); if(!a)throw new Error('Application name is missing.');
   if(!SAFE_APPS.has(a) && !/^[a-z0-9._ -]{1,80}$/i.test(a)) throw new Error('Application name is not allowed.');
-  if(a==='settings') return runPS("Start-Process 'ms-settings:'");
+  if(a==='settings') { await runPS("Start-Process 'ms-settings:'"); return {started:true,via:'protocol'}; }
   const exe={chrome:'chrome.exe',brave:'brave.exe',msedge:'msedge.exe',discord:'discord.exe',code:'code.exe',spotify:'Spotify.exe',minecraftlauncher:'MinecraftLauncher.exe'}[a] || `${a}.exe`;
-  const direct=()=>spawnApp(exe,args);
-  try { await direct(); return; } catch {}
-  // Start-menu fallback makes Store/AppX installs (notably Minecraft/Spotify) usable.
-  const encoded=Buffer.from(a,'utf8').toString('base64');
-  const argJson=JSON.stringify(args);
-  const ps=`$needle=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')); $apps=Get-StartApps | Where-Object { $_.Name -like ('*'+$needle+'*') -or $_.AppID -like ('*'+$needle+'*') }; if($apps){$app=$apps | Select-Object -First 1; Start-Process ('shell:AppsFolder\\'+$app.AppID) -ArgumentList ${JSON.stringify(argJson)}} else { throw 'Application not found in PATH or Start menu: '+$needle }`;
-  return runPS(ps);
+  // First verify the executable actually exists on PATH. spawn() can otherwise
+  // report success too late, which used to make JARVIS claim it opened apps
+  // that Windows never launched.
+  try {
+    const where=await new Promise((resolve,reject)=>{
+      execFile('where.exe',[exe],{windowsHide:true,timeout:5000},(error,stdout,stderr)=>{
+        if(error) return reject(error);
+        resolve(String(stdout||'').split(/\r?\n/).map(x=>x.trim()).find(Boolean)||'');
+      });
+    });
+    if(where){ await spawnApp(where,args); return {started:true,via:'PATH',executable:where}; }
+  } catch {}
+  // Common per-user install locations for Chromium/Spotify.
+  const candidates=[];
+  const local=process.env.LOCALAPPDATA||'';
+  const programFiles=process.env.ProgramFiles||'';
+  const programFilesX86=process.env['ProgramFiles(x86)']||'';
+  if(a==='brave') candidates.push(path.join(local,'BraveSoftware','Brave-Browser','Application','brave.exe'),path.join(programFiles,'BraveSoftware','Brave-Browser','Application','brave.exe'),path.join(programFilesX86,'BraveSoftware','Brave-Browser','Application','brave.exe'));
+  if(a==='chrome') candidates.push(path.join(local,'Google','Chrome','Application','chrome.exe'),path.join(programFiles,'Google','Chrome','Application','chrome.exe'),path.join(programFilesX86,'Google','Chrome','Application','chrome.exe'));
+  if(a==='msedge') candidates.push(path.join(programFiles,'Microsoft','Edge','Application','msedge.exe'),path.join(programFilesX86,'Microsoft','Edge','Application','msedge.exe'));
+  if(a==='spotify') candidates.push(path.join(local,'Microsoft','WindowsApps','Spotify.exe'),path.join(local,'Spotify','Spotify.exe'));
+  for(const candidate of candidates){
+    if(candidate && fs.existsSync(candidate)){ await spawnApp(candidate,args); return {started:true,via:'known-path',executable:candidate}; }
+  }
+  // Start-menu fallback handles Microsoft Store/AppX installs and other apps
+  // that do not expose a conventional executable path.
+  return startAppFromStartMenu(a,args);
 }
 async function closeApp(app){
   const a=normalizeApp(app); if(!a)throw new Error('Application name is missing.');
@@ -91,17 +127,56 @@ async function mouse(spec){
 
 
 async function browserSearch(query, browser='brave') {
-  const q=String(query||'').trim(); if(!q) throw new Error('Search query is empty.');
-  const url=`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+  const q=String(query||'').trim();
+  if(!q) throw new Error('Search query is empty.');
   const b=normalizeApp(browser||'brave');
-  if(b==='brave') return openApp('brave',[url]);
-  return openUrl(url);
+  if(b!=='brave' && b!=='chrome' && b!=='msedge') throw new Error(`Unsupported browser: ${browser}`);
+  const url=`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+  const result=await openBrowserUrl(url,b);
+  return {text:`Opened YouTube search for “${q}” in ${b}.`,details:result};
+}
+
+async function findBrowserExecutable(browser='brave') {
+  const b=normalizeApp(browser);
+  const exe={brave:'brave.exe',chrome:'chrome.exe',msedge:'msedge.exe'}[b];
+  if(!exe) throw new Error(`Unsupported browser: ${browser}`);
+  try {
+    const where=await new Promise((resolve,reject)=>{
+      execFile('where.exe',[exe],{windowsHide:true,timeout:5000},(error,stdout)=>{
+        if(error) return reject(error);
+        resolve(String(stdout||'').split(/\r?\n/).map(x=>x.trim()).find(Boolean)||'');
+      });
+    });
+    if(where) return where;
+  } catch {}
+  const local=process.env.LOCALAPPDATA||'';
+  const programFiles=process.env.ProgramFiles||'';
+  const programFilesX86=process.env['ProgramFiles(x86)']||'';
+  const candidates={
+    brave:[path.join(local,'BraveSoftware','Brave-Browser','Application','brave.exe'),path.join(programFiles,'BraveSoftware','Brave-Browser','Application','brave.exe'),path.join(programFilesX86,'BraveSoftware','Brave-Browser','Application','brave.exe')],
+    chrome:[path.join(local,'Google','Chrome','Application','chrome.exe'),path.join(programFiles,'Google','Chrome','Application','chrome.exe'),path.join(programFilesX86,'Google','Chrome','Application','chrome.exe')],
+    msedge:[path.join(programFiles,'Microsoft','Edge','Application','msedge.exe'),path.join(programFilesX86,'Microsoft','Edge','Application','msedge.exe')]
+  }[b]||[];
+  const found=candidates.find(x=>x&&fs.existsSync(x));
+  if(found) return found;
+  throw new Error(`${b} was not found on this PC.`);
+}
+
+async function openBrowserUrl(url,browser='brave') {
+  ensureWindows();
+  const u=String(url||'').trim();
+  if(!/^https?:\/\//i.test(u)) throw new Error('URL must start with http:// or https://');
+  const executable=await findBrowserExecutable(browser);
+  await spawnApp(executable,[u]);
+  await new Promise(r=>setTimeout(r,900));
+  const processName=path.basename(executable,'.exe');
+  const check=await runPS(`$p=Get-Process -Name '${psEscape(processName)}' -ErrorAction SilentlyContinue; if($p){'running'} else {exit 1}`).catch(()=>null);
+  if(check!=='running') throw new Error(`Browser process did not remain running after launch: ${browser}.`);
+  return {started:true,browser:normalizeApp(browser),url:u,executable};
 }
 
 async function spotifyPlay(query) {
   const q=String(query||'').trim(); if(!q) throw new Error('Spotify search is empty.');
-  // Spotify's desktop URI opens the search view. Enter selects the first result,
-  // which keeps this local and does not require Spotify API credentials.
   await openApp('spotify');
   await new Promise(r=>setTimeout(r,1400));
   await hotkey('CTRL+K').catch(()=>{});
@@ -114,8 +189,11 @@ async function spotifyPlay(query) {
 }
 
 async function openUrl(url){
-  const u=String(url||'').trim(); if(!/^https?:\/\//i.test(u))throw new Error('URL must start with http:// or https://');
-  if(u.length>2000)throw new Error('URL is too long.'); await spawnApp('cmd.exe',['/c','start','',u]); return `Opened ${u}`;
+  const u=String(url||'').trim();
+  if(!/^https?:\/\//i.test(u))throw new Error('URL must start with http:// or https://');
+  if(u.length>2000)throw new Error('URL is too long.');
+  await spawnApp('cmd.exe',['/c','start','',u]);
+  return `Opened ${u}`;
 }
 async function fileAction(action,src,dst){
   const s=path.resolve(String(src||'')); if(!s||s===path.parse(s).root)throw new Error('Unsafe file path.');
