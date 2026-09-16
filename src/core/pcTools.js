@@ -4,7 +4,7 @@ const path = require('node:path');
 
 const IS_WIN = process.platform === 'win32';
 const MAX_OUTPUT = 5000;
-const SAFE_APPS = new Set(['chrome','brave','msedge','discord','notepad','calculator','calc','explorer','cmd','powershell','code','spotify','steam','taskmgr','settings','paint','mspaint','minecraft','minecraftlauncher']);
+const SAFE_APPS = new Set(['chrome','brave','msedge','discord','notepad','calculator','calc','explorer','cmd','powershell','code','spotify','steam','taskmgr','settings','paint','mspaint','minecraft','minecraftlauncher','modrinth','epic','epicgameslauncher']);
 const BLOCKED = /\b(format|diskpart|cipher\s+\/w|bcdedit|bootrec|takeown|icacls|reg\s+delete|shutdown|restart-computer|stop-computer|remove-item\s+-recurse\s+.*(c:|windows)|del\s+\/s\s+\/q\s+c:\\windows)\b/i;
 
 function ensureWindows(){ if(!IS_WIN) throw new Error('JARVIS PC control currently requires Windows.'); }
@@ -27,57 +27,169 @@ function spawnApp(command,args=[]){
     child.once('error',err=>{ if(!settled){settled=true; reject(err);} });
   });
 }
-async function findStartApp(app){
-  const encoded=Buffer.from(String(app),'utf8').toString('base64');
-  const ps=`$needle=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')); $apps=Get-StartApps | Where-Object { $_.Name -like ('*'+$needle+'*') -or $_.AppID -like ('*'+$needle+'*') }; if($apps){ $app=$apps | Select-Object -First 1; Write-Output $app.AppID } else { exit 1 }`;
-  return (await runPS(ps)).trim();
+
+const APP_ALIASES={
+  'google chrome':'chrome','chrome browser':'chrome','googlechrome':'chrome',
+  'microsoft edge':'msedge','edge browser':'msedge','edge':'msedge',
+  'brave browser':'brave','brave':'brave',
+  'discord app':'discord','discordapp':'discord',
+  'visual studio code':'code','vs code':'code',
+  'file explorer':'explorer','task manager':'taskmgr',
+  'calculator':'calc','minecraft launcher':'minecraftlauncher','minecraft launcher for windows':'minecraftlauncher',
+  'modrinth app':'modrinth','modrinth':'modrinth',
+  'epic games launcher':'epicgameslauncher','epic launcher':'epicgameslauncher','epic games':'epicgameslauncher',
+  'spotify':'spotify'
+};
+function normalizeApp(app){
+  const raw=String(app||'').trim().toLowerCase().replace(/\.exe$/,'');
+  return APP_ALIASES[raw] || raw;
 }
-async function startAppFromStartMenu(app,args=[]){
-  const appId=await findStartApp(app);
-  if(!appId) throw new Error(`Application not found in Start menu: ${app}`);
-  const encoded=Buffer.from(appId,'utf8').toString('base64');
+
+async function startMenuApps(){
+  const ps=`Get-StartApps | ForEach-Object { [PSCustomObject]@{Name=$_.Name;AppID=$_.AppID} } | ConvertTo-Json -Compress`;
+  const out=await runPS(ps);
+  if(!out)return [];
+  try { const parsed=JSON.parse(out); return (Array.isArray(parsed)?parsed:[parsed]).filter(x=>x?.Name&&x?.AppID); }
+  catch { return []; }
+}
+function appMatchScore(name,query){
+  const n=String(name||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  const q=String(query||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  if(!n||!q)return -1;
+  if(n===q)return 1000;
+  if(n.startsWith(q))return 900;
+  if(n.includes(q))return 800;
+  const qt=q.split(' ').filter(Boolean), nt=n.split(' ').filter(Boolean);
+  if(qt.length && qt.every(t=>nt.some(x=>x===t||x.startsWith(t))))return 700;
+  return -1;
+}
+async function discoverStartApp(query){
+  const apps=await startMenuApps();
+  const matches=apps.map(a=>({...a,score:appMatchScore(a.Name,query)})).filter(a=>a.score>=0).sort((a,b)=>b.score-a.score||a.Name.localeCompare(b.Name));
+  if(!matches.length)return null;
+  const top=matches[0];
+  if(matches.length>1 && matches[1].score===top.score) return {ambiguous:true,matches:matches.slice(0,8)};
+  return top;
+}
+async function startStartMenuApp(appId,args=[]){
+  const encoded=Buffer.from(String(appId),'utf8').toString('base64');
   const argEncoded=Buffer.from(JSON.stringify(args||[]),'utf8').toString('base64');
-  const ps=`$id=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')); $args=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${argEncoded}')); Start-Process ('shell:AppsFolder\\'+$id) -ArgumentList $args`;
+  const ps=`$id=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')); $json=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${argEncoded}')); $args=@(); try {$args=ConvertFrom-Json $json} catch {}; Start-Process ('shell:AppsFolder\\'+$id) -ArgumentList $args`;
   await runPS(ps);
   return {started:true,via:'StartMenu',appId};
 }
-function normalizeApp(app){
-  const a=String(app||'').trim().toLowerCase().replace(/\.exe$/,'');
-  const aliases={googlechrome:'chrome','google chrome':'chrome','microsoft edge':'msedge','edge':'msedge','brave browser':'brave','brave browser beta':'brave','discordapp':'discord','file explorer':'explorer','visual studio code':'code','vs code':'code','task manager':'taskmgr','calculator':'calc','minecraft launcher':'minecraftlauncher','minecraft launcher for windows':'minecraftlauncher'};
-  return aliases[a]||a;
-}
-async function openApp(app,args=[]){
-  const a=normalizeApp(app); if(!a)throw new Error('Application name is missing.');
-  if(!SAFE_APPS.has(a) && !/^[a-z0-9._ -]{1,80}$/i.test(a)) throw new Error('Application name is not allowed.');
-  if(a==='settings') { await runPS("Start-Process 'ms-settings:'"); return {started:true,via:'protocol'}; }
-  const exe={chrome:'chrome.exe',brave:'brave.exe',msedge:'msedge.exe',discord:'discord.exe',code:'code.exe',spotify:'Spotify.exe',minecraftlauncher:'MinecraftLauncher.exe'}[a] || `${a}.exe`;
-  // First verify the executable actually exists on PATH. spawn() can otherwise
-  // report success too late, which used to make JARVIS claim it opened apps
-  // that Windows never launched.
-  try {
-    const where=await new Promise((resolve,reject)=>{
-      execFile('where.exe',[exe],{windowsHide:true,timeout:5000},(error,stdout,stderr)=>{
-        if(error) return reject(error);
-        resolve(String(stdout||'').split(/\r?\n/).map(x=>x.trim()).find(Boolean)||'');
-      });
-    });
-    if(where){ await spawnApp(where,args); return {started:true,via:'PATH',executable:where}; }
-  } catch {}
-  // Common per-user install locations for Chromium/Spotify.
-  const candidates=[];
-  const local=process.env.LOCALAPPDATA||'';
-  const programFiles=process.env.ProgramFiles||'';
-  const programFilesX86=process.env['ProgramFiles(x86)']||'';
-  if(a==='brave') candidates.push(path.join(local,'BraveSoftware','Brave-Browser','Application','brave.exe'),path.join(programFiles,'BraveSoftware','Brave-Browser','Application','brave.exe'),path.join(programFilesX86,'BraveSoftware','Brave-Browser','Application','brave.exe'));
-  if(a==='chrome') candidates.push(path.join(local,'Google','Chrome','Application','chrome.exe'),path.join(programFiles,'Google','Chrome','Application','chrome.exe'),path.join(programFilesX86,'Google','Chrome','Application','chrome.exe'));
-  if(a==='msedge') candidates.push(path.join(programFiles,'Microsoft','Edge','Application','msedge.exe'),path.join(programFilesX86,'Microsoft','Edge','Application','msedge.exe'));
-  if(a==='spotify') candidates.push(path.join(local,'Microsoft','WindowsApps','Spotify.exe'),path.join(local,'Spotify','Spotify.exe'));
-  for(const candidate of candidates){
-    if(candidate && fs.existsSync(candidate)){ await spawnApp(candidate,args); return {started:true,via:'known-path',executable:candidate}; }
+
+async function discoverEpicGame(query){
+  ensureWindows();
+  const root=path.join(process.env.ProgramData||'', 'Epic','EpicGamesLauncher','Data','Manifests');
+  if(!root || !fs.existsSync(root)) return null;
+  const files=fs.readdirSync(root).filter(f=>f.toLowerCase().endsWith('.item'));
+  const found=[];
+  for(const file of files){
+    try{
+      const data=JSON.parse(fs.readFileSync(path.join(root,file),'utf8'));
+      const display=String(data.DisplayName||data.AppName||'');
+      const score=appMatchScore(display,query);
+      if(score>=0 && data.AppName) found.push({displayName:display,appName:String(data.AppName),namespace:String(data.CatalogNamespace||''),catalogItemId:String(data.CatalogItemId||''),installLocation:String(data.InstallLocation||''),score});
+    }catch{}
   }
-  // Start-menu fallback handles Microsoft Store/AppX installs and other apps
-  // that do not expose a conventional executable path.
-  return startAppFromStartMenu(a,args);
+  found.sort((a,b)=>b.score-a.score||a.displayName.localeCompare(b.displayName));
+  if(!found.length)return null;
+  if(found.length>1 && found[0].score===found[1].score)return {ambiguous:true,matches:found.slice(0,8)};
+  return found[0];
+}
+async function launchEpicGame(query){
+  const game=await discoverEpicGame(query);
+  if(!game) throw new Error(`I couldn't find an installed Epic Games title matching "${query}".`);
+  if(game.ambiguous) throw new Error(`Multiple Epic Games titles matched "${query}": ${game.matches.map(x=>x.displayName).join(', ')}.`);
+  // Epic's launcher URI is derived from the installed manifest, so no game path or ID is hardcoded.
+  const encoded=game.namespace&&game.catalogItemId ? `${encodeURIComponent(game.namespace)}%3A${encodeURIComponent(game.catalogItemId)}%3A${encodeURIComponent(game.appName)}` : encodeURIComponent(game.appName);
+  const uri=`com.epicgames.launcher://apps/${encoded}?action=launch&silent=true`;
+  await spawnApp('cmd.exe',['/c','start','',uri]);
+  return {started:true,launcher:'Epic Games',game:game.displayName,appName:game.appName,uri};
+}
+
+async function discoverModrinthProfile(query){
+  ensureWindows();
+  const roots=[];
+  const appData=process.env.APPDATA||'';
+  if(appData) roots.push(path.join(appData,'ModrinthApp','profiles'),path.join(appData,'com.modrinth.theseus','profiles'));
+  // The user can customize the Modrinth app directory. If the default paths do not exist,
+  // discover a likely profile folder under the app's own Start Menu registration directory.
+  const results=[];
+  for(const root of roots){
+    if(!fs.existsSync(root))continue;
+    for(const dir of fs.readdirSync(root,{withFileTypes:true}).filter(x=>x.isDirectory())){
+      const profile=path.join(root,dir.name,'profile.json');
+      if(!fs.existsSync(profile))continue;
+      try{
+        const data=JSON.parse(fs.readFileSync(profile,'utf8'));
+        const name=String(data.name||data.display_name||data.displayName||dir.name);
+        const score=appMatchScore(name,query);
+        if(score>=0)results.push({name,id:dir.name,root:path.join(root,dir.name),score});
+      }catch{}
+    }
+  }
+  results.sort((a,b)=>b.score-a.score||a.name.localeCompare(b.name));
+  if(!results.length)return null;
+  if(results.length>1 && results[0].score===results[1].score)return {ambiguous:true,matches:results.slice(0,8)};
+  return results[0];
+}
+async function launchModrinth(query){
+  const profile=await discoverModrinthProfile(query);
+  const app=await discoverStartApp('Modrinth App');
+  if(!app) throw new Error('Modrinth App is not installed or is not registered in the Windows Start menu.');
+  if(app.ambiguous) throw new Error('Multiple Modrinth App registrations were found.');
+  const started=await startStartMenuApp(app.AppID);
+  if(profile?.ambiguous) throw new Error(`Multiple Modrinth profiles matched "${query}": ${profile.matches.map(x=>x.name).join(', ')}.`);
+  // Modrinth App currently does not expose a stable documented CLI for launching a named profile.
+  // We still resolve the real installed profile instead of hardcoding a path, then open the launcher.
+  // The result reports whether a matching profile was discovered so JARVIS never pretends it launched one.
+  if(profile) return {started:true,launcher:'Modrinth App',profile:profile.name,profileId:profile.id,profileRoot:profile.root,requiresProfileSelection:true,...started};
+  return {started:true,launcher:'Modrinth App',requiresProfileSelection:true,...started};
+}
+
+async function discoverApplication(query){
+  const q=normalizeApp(query);
+  const start=await discoverStartApp(q);
+  if(start) return {type:'application',name:start.Name,appId:start.AppID,source:'StartMenu'};
+  const epic=await discoverEpicGame(query);
+  if(epic && !epic.ambiguous) return {type:'game',name:epic.displayName,launcher:'Epic Games',appName:epic.appName,source:'EpicManifest'};
+  const mod=await discoverModrinthProfile(query);
+  if(mod && !mod.ambiguous) return {type:'minecraft-profile',name:mod.name,profileId:mod.id,source:'ModrinthProfile'};
+  return null;
+}
+
+async function openApp(app,args=[]){
+  const requested=String(app||'').trim(); if(!requested)throw new Error('Application name is missing.');
+  const a=normalizeApp(requested);
+  if(a==='settings'){await runPS("Start-Process 'ms-settings:'");return {started:true,via:'protocol'};}
+  if(/^(rocket\s*league)$/i.test(requested)) return launchEpicGame('Rocket League');
+  if(/^(minecraft|minecraft\s+java|mc)$/i.test(requested)) return launchModrinth('Minecraft');
+  if(a==='modrinth'){
+    const appEntry=await discoverStartApp('Modrinth App');
+    if(!appEntry)throw new Error('Modrinth App was not found in Windows Start apps.');
+    if(appEntry.ambiguous)throw new Error('Multiple Modrinth App entries were found.');
+    return startStartMenuApp(appEntry.AppID,args);
+  }
+  if(a==='epicgameslauncher'||a==='epic'){
+    const appEntry=await discoverStartApp('Epic Games Launcher');
+    if(!appEntry)throw new Error('Epic Games Launcher was not found in Windows Start apps.');
+    if(appEntry.ambiguous)throw new Error('Multiple Epic Games Launcher entries were found.');
+    return startStartMenuApp(appEntry.AppID,args);
+  }
+  // For ordinary apps, prefer the actual Start Menu registration. This is what makes
+  // arbitrary installed apps work without a hardcoded executable path.
+  const start=await discoverStartApp(requested);
+  if(start?.ambiguous) throw new Error(`Multiple installed apps matched "${requested}": ${start.matches.map(x=>x.Name).join(', ')}.`);
+  if(start) return startStartMenuApp(start.AppID,args);
+  // PATH and a small set of dynamic install roots remain a fallback for apps that do not register in Start.
+  const exe={chrome:'chrome.exe',brave:'brave.exe',msedge:'msedge.exe',discord:'discord.exe',code:'code.exe',spotify:'Spotify.exe'}[a] || `${a}.exe`;
+  try{
+    const where=await new Promise((resolve,reject)=>execFile('where.exe',[exe],{windowsHide:true,timeout:5000},(error,stdout)=>error?reject(error):resolve(String(stdout||'').split(/\r?\n/).map(x=>x.trim()).find(Boolean)||'')));
+    if(where){await spawnApp(where,args);return {started:true,via:'PATH',executable:where};}
+  }catch{}
+  throw new Error(`I couldn't discover an installed application named "${requested}".`);
 }
 async function closeApp(app){
   const a=normalizeApp(app); if(!a)throw new Error('Application name is missing.');
@@ -87,9 +199,27 @@ async function closeApp(app){
 }
 async function listProcesses(){ return runPS("Get-Process | Sort-Object CPU -Descending | Select-Object -First 25 Name,Id,CPU | Format-Table -AutoSize | Out-String"); }
 async function setVolume(percent){
-  const n=Math.max(0,Math.min(100,Number(percent))); if(!Number.isFinite(n))throw new Error('Volume must be 0-100.');
-  const script=`Add-Type -TypeDefinition @'\nusing System; using System.Runtime.InteropServices; public class Audio { [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo); }\n'@; $w=New-Object -ComObject WScript.Shell; 1..50 | % { $w.SendKeys([char]174) }; 1..${Math.round(n/2)} | % { $w.SendKeys([char]175) }`;
-  await runPS(script); return `Volume adjusted to approximately ${Math.round(n)}%.`;
+  const n=Number(percent);
+  if(!Number.isFinite(n) || n<0 || n>100) throw new Error('Volume must be 0-100.');
+  // Set the master endpoint volume directly through Windows Core Audio. This avoids
+  // the old key-press approximation that could drift to 100%.
+  const scalar=(n/100).toFixed(4);
+  const script=`Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class MMDeviceEnumerator {}
+[ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] interface IMMDeviceEnumerator {
+ int EnumAudioEndpoints(int dataFlow,int stateMask,out IntPtr devices); int GetDefaultAudioEndpoint(int dataFlow,int role,out IMMDevice device);
+}
+[ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] interface IMMDevice { int Activate(ref Guid id,int clsCtx,IntPtr activationParams,[MarshalAs(UnmanagedType.IUnknown)] out object obj); }
+[ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] interface IAudioEndpointVolume {
+ int RegisterControlChangeNotify(IntPtr notify); int UnregisterControlChangeNotify(IntPtr notify); int GetChannelCount(out uint count); int SetMasterVolumeLevel(float level, Guid context); int SetMasterVolumeLevelScalar(float level, Guid context); int GetMasterVolumeLevel(out float level); int GetMasterVolumeLevelScalar(out float level); int SetMute(bool mute, Guid context); int GetMute(out bool mute);
+}
+public static class Audio { public static void Set(float v) { var e=(IMMDeviceEnumerator)new MMDeviceEnumerator(); IMMDevice d; e.GetDefaultAudioEndpoint(0,1,out d); var iid=typeof(IAudioEndpointVolume).GUID; object o; d.Activate(ref iid,23,IntPtr.Zero,out o); ((IAudioEndpointVolume)o).SetMasterVolumeLevelScalar(v,Guid.Empty); } }
+'@;
+[Audio]::Set(${scalar});`;
+  await runPS(script);
+  return `Volume set to ${Math.round(n)}%.`;
 }
 async function key(keys){
   const value=String(keys||'').trim(); if(!value)throw new Error('Key is missing.');
@@ -208,4 +338,4 @@ async function shell(command){
   const c=String(command||'').trim(); if(!c)throw new Error('Command is empty.'); if(c.length>2000)throw new Error('Command too long.'); if(BLOCKED.test(c))throw new Error('That system command is blocked by JARVIS safety policy.');
   return runPS(c,{timeout:20000});
 }
-module.exports={openApp,closeApp,listProcesses,setVolume,key,typeText,hotkey,mouse,screenshot,openUrl,browserSearch,spotifyPlay,fileAction,shell,IS_WIN};
+module.exports={openApp,closeApp,listProcesses,setVolume,key,typeText,hotkey,mouse,screenshot,openUrl,browserSearch,spotifyPlay,fileAction,shell,discoverApplication,discoverStartApp,discoverEpicGame,discoverModrinthProfile,IS_WIN};

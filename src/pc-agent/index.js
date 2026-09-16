@@ -29,7 +29,7 @@ function connect() {
 }
 
 async function execute(action, step) {
-  if (action === 'pc_open_app') return { text: `Opened ${step.name}.`, details: await pc.openApp(step.name, step.targets || []) };
+  if (action === 'pc_open_app') { const details=await pc.openApp(step.name, step.targets || []); return { text:`Opened ${step.name}.`, details }; }
   if (action === 'pc_close_app') return { text: await pc.closeApp(step.name) };
   if (action === 'pc_processes') return { text: await pc.listProcesses() };
   if (action === 'pc_volume') return { text: await pc.setVolume(step.durationMs) };

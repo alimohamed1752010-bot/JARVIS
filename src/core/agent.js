@@ -41,8 +41,8 @@ function deterministicAgentPlan(prompt) {
   // actions for the dedicated, allowlisted PC tools.
   {
     const steps=[];
-    const hasPC=/\b(?:open|launch|start|run|search|play|set|make)\b/i.test(raw) &&
-      /\b(?:youtube|spotify|brave|chrome|edge|minecraft|volume|browser|music)\b/i.test(raw);
+    const hasPC=/\b(?:open|launch|start|run|play|put|turn|set|make|get|fire|boot)\b/i.test(raw) &&
+      /\b(?:youtube|spotify|brave|chrome|edge|minecraft|volume|browser|music|rocket\s*league|epic(?:\s+games)?|modrinth|discord|steam|obs|notepad|calculator|calc|explorer|code)\b/i.test(raw);
     if(hasPC){
       const pushApp=(name)=>{ if(!steps.some(x=>x.action==='pc_open_app'&&x.name===name)) steps.push(base('pc_open_app',{name})); };
       // Browser intent: "open youtube" means navigate to YouTube, not a search.
@@ -51,15 +51,26 @@ function deterministicAgentPlan(prompt) {
       }
       const search=raw.match(/(?:search|look\s+up|find)\s+(?:youtube\s+)?(?:for\s+)?(.+?)(?=\s+(?:and|then)\s+(?:open|launch|start|play|set|make|run)\b|$)/i);
       if(search && search[1].trim() && !/^youtube$/i.test(search[1].trim())) steps.push(base('pc_browser_search',{name:search[1].trim(),reason:'brave'}));
-      if(/\b(?:open|launch|start)\s+(?:brave|brave browser)\b/i.test(raw)) pushApp('brave');
-      if(/\b(?:open|launch|start)\s+(?:chrome|google chrome)\b/i.test(raw)) pushApp('chrome');
-      if(/\b(?:open|launch|start)\s+(?:edge|microsoft edge)\b/i.test(raw)) pushApp('msedge');
-      if(/\b(?:open|launch|start)\s+spotify\b/i.test(raw)) pushApp('spotify');
-      const play=raw.match(/\b(?:play|put on)\s+(.+?)(?=\s+(?:and|then)\s+(?:set|make)\s+(?:the\s+)?volume|\s+(?:and|then)\s+(?:run|open|launch|start)\s+minecraft\b|$)/i);
+      if(/\b(?:open|launch|start|run|get|fire up)\s+(?:brave|brave browser)\b/i.test(raw)) pushApp('brave');
+      if(/\b(?:open|launch|start|run|get|fire up)\s+(?:chrome|google chrome)\b/i.test(raw)) pushApp('chrome');
+      if(/\b(?:open|launch|start|run|get|fire up)\s+(?:edge|microsoft edge)\b/i.test(raw)) pushApp('msedge');
+      if(/\b(?:open|launch|start|run|put on|get|fire up)\s+spotify\b/i.test(raw)) pushApp('spotify');
+      if(/\b(?:open|launch|start|run|play|fire up|get)\s+rocket\s*league\b/i.test(raw)) pushApp('Rocket League');
+      if(/\b(?:open|launch|start|run|play|fire up|get)\s+(?:modrinth|modrinth app)\b/i.test(raw)) pushApp('Modrinth App');
+      if(/\b(?:open|launch|start|run|play|fire up|get)\s+(?:epic|epic games|epic games launcher)\b/i.test(raw)) pushApp('Epic Games Launcher');
+      // Natural app requests. These are intentionally passed as names instead of executable paths;
+      // the Windows agent dynamically discovers the installed registration.
+      const appWords=raw.match(/(?:\b(?:open|launch|start|run|play|fire up|get)\s+)([A-Za-z0-9][A-Za-z0-9 .+&_-]{1,60}?)(?=\s+(?:and|then|also)\s+|$)/gi)||[];
+      for(const phrase of appWords){
+        const m=phrase.match(/(?:open|launch|start|run|play|fire up|get)\s+(.+)/i);
+        const candidate=m?.[1]?.trim();
+        if(candidate && !/^(youtube|yt|spotify|brave|brave browser|chrome|google chrome|edge|microsoft edge|rocket league|modrinth|modrinth app|epic|epic games|epic games launcher|minecraft|mc|minecraft launcher)$/i.test(candidate) && !/^(the )?(volume|music|browser)$/i.test(candidate)) pushApp(candidate);
+      }
+      const play=raw.match(/\b(?:play|put on)\s+(.+?)(?=\s+(?:and|then)\s+(?:set|make)\s+(?:the\s+)?volume|\s+(?:and|then)\s+(?:run|open|launch|start)\s+(?:minecraft|rocket\s*league)\b|$)/i);
       if(play && /\bspotify\b/i.test(raw)) steps.push(base('pc_spotify_play',{name:play[1].trim()}));
       const vol=raw.match(/(?:set|make)\s+(?:the\s+)?volume\s+(?:to\s+)?(\d{1,3})\s*%?/i);
       if(vol) steps.push(base('pc_volume',{durationMs:Math.max(0,Math.min(100,Number(vol[1])))}));
-      if(/\b(?:run|open|launch|start)\s+minecraft\b/i.test(raw)) pushApp('minecraftlauncher');
+      if(/\b(?:run|open|launch|start|play|fire up|get)\s+(?:minecraft|mc|minecraft java)\b/i.test(raw)) pushApp('Minecraft');
       if(steps.length) return {summary:'Execute the requested Windows desktop actions.',needsConfirmation:false,steps};
     }
   }
@@ -128,7 +139,7 @@ function cleanPlan(plan) {
     permissionChanges: Array.isArray(s?.permissionChanges) ? s.permissionChanges.map(x => ({permission:String(x?.permission||'').trim(),enabled:Boolean(x?.enabled)})).filter(x=>x.permission).slice(0,30) : [],
     caseId: String(s?.caseId || '').trim(),
     createParentIfMissing:Boolean(s?.createParentIfMissing),
-    reason: String(s?.reason || '').trim().slice(0,500), durationMs: Math.min(Math.max(Number(s?.durationMs)||600000,1000),28*24*60*60*1000),
+    reason: String(s?.reason || '').trim().slice(0,500), durationMs: String(s?.action||'').toLowerCase()==='pc_volume' ? Math.min(Math.max(Number(s?.durationMs ?? 50),0),100) : Math.min(Math.max(Number(s?.durationMs)||600000,1000),28*24*60*60*1000),
   })).filter(s => s.action);
   return { summary:String(plan.summary||'').trim().slice(0,500), needsConfirmation:Boolean(plan.needsConfirmation)||steps.some(s=>HIGH_RISK.has(s.action)), steps };
 }
@@ -329,7 +340,7 @@ async function executePlan({message,plan,config,saveConfig,dryRun=false}) {
   const failed=outputs.find(x=>!x.ok||x.verified===false);
   journal.record(config,{action:'PLAN_EXECUTION',actorId:message.author.id,reason:plan.summary,before:null,after:{steps:success,total:plan.steps.length,verified},reversible:false,metadata:{summary:plan.summary,steps:plan.steps.map(s=>s.action)}});
   saveConfig(message.guild.id,config);
-  return {handled:true,text:`**JARVIS V12 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
+  return {handled:true,text:`**JARVIS V16.6 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
 }
 
 async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {

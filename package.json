@@ -1,7 +1,7 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "16.1.0",
-  "description": "JARVIS V16.1 Unified Railway AI + Windows PC Agent",
+  "version": "16.6.0",
+  "description": "JARVIS V16.6 Natural Language + Dynamic Apps Railway AI + Windows PC Agent",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
