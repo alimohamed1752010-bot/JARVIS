@@ -25,7 +25,7 @@ function start(httpServer) {
     if (socket && socket.readyState === 1) socket.close(4000, 'Replaced by newer PC agent');
     socket = ws;
     console.log('[PC BRIDGE] PC agent connected');
-    ws.send(JSON.stringify({ type: 'hello', id: crypto.randomUUID(), version: '17.0' }));
+    ws.send(JSON.stringify({ type: 'hello', id: crypto.randomUUID(), version: '18.0' }));
     ws.on('message', raw => {
       let msg; try { msg = JSON.parse(String(raw)); } catch { return; }
       if (!msg?.id || !pending.has(msg.id)) return;

@@ -370,6 +370,28 @@ async function openUrl(url,browser='brave'){
   const result=await openBrowserUrl(u,b);
   return `Opened ${u} in ${b}.`;
 }
+
+async function systemStatus(){
+  ensureWindows();
+  const ps=`$os=Get-CimInstance Win32_OperatingSystem; $cpu=(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average; $memTotal=[math]::Round($os.TotalVisibleMemorySize/1MB,1); $memFree=[math]::Round($os.FreePhysicalMemory/1MB,1); $memUsed=[math]::Round($memTotal-$memFree,1); $vol=Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object { [PSCustomObject]@{Drive=$_.DeviceID;FreeGB=[math]::Round($_.FreeSpace/1GB,1);SizeGB=[math]::Round($_.Size/1GB,1)} }; [PSCustomObject]@{Computer=$env:COMPUTERNAME;Windows=$os.Caption;CPUPercent=[math]::Round([double]$cpu,1);RAMUsedGB=$memUsed;RAMTotalGB=$memTotal;Disks=@($vol)} | ConvertTo-Json -Compress -Depth 4`;
+  const out=await runPS(ps); let data; try{data=JSON.parse(out)}catch{return out;}
+  return {computer:data.Computer,windows:data.Windows,cpuPercent:data.CPUPercent,ramUsedGB:data.RAMUsedGB,ramTotalGB:data.RAMTotalGB,disks:data.Disks||[]};
+}
+async function activeWindow(){
+  ensureWindows();
+  const ps=`Add-Type @'\nusing System; using System.Text; using System.Runtime.InteropServices; public static class WinCtl { [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId); }\n'@; $h=[WinCtl]::GetForegroundWindow(); $sb=New-Object Text.StringBuilder 512; [void][WinCtl]::GetWindowText($h,$sb,512); [uint32]$pid=0; [void][WinCtl]::GetWindowThreadProcessId($h,[ref]$pid); $p=Get-Process -Id $pid -ErrorAction SilentlyContinue; [PSCustomObject]@{Title=$sb.ToString();Process=if($p){$p.ProcessName}else{''};PID=$pid} | ConvertTo-Json -Compress`;
+  const out=await runPS(ps); try{return JSON.parse(out)}catch{return {Title:'',Process:'',PID:0};}
+}
+async function networkStatus(){
+  ensureWindows();
+  const ps=`$ad=Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object Status -eq 'Up' | Select-Object -First 8 Name,LinkSpeed,Status; $cfg=Get-NetIPConfiguration -ErrorAction SilentlyContinue | Where-Object {$_.IPv4DefaultGateway} | Select-Object -First 3 InterfaceAlias,@{N='IPv4';E={$_.IPv4Address.IPAddress}},@{N='Gateway';E={$_.IPv4DefaultGateway.NextHop}},@{N='DNS';E={$_.DNSServer.ServerAddresses -join ', '}}; [PSCustomObject]@{Adapters=@($ad);Interfaces=@($cfg)} | ConvertTo-Json -Compress -Depth 5`;
+  const out=await runPS(ps); try{return JSON.parse(out)}catch{return {Adapters:[],Interfaces:[]};}
+}
+async function pcState(){
+  const [status,window,network,processes]=await Promise.all([systemStatus(),activeWindow(),networkStatus(),listProcesses()]);
+  return {status,activeWindow:window,network,topProcesses:processes};
+}
+
 async function fileAction(action,src,dst){
   const s=path.resolve(String(src||'')); if(!s||s===path.parse(s).root)throw new Error('Unsafe file path.');
   if(action==='read'){ const st=fs.statSync(s); if(st.size>1024*1024)throw new Error('File is larger than 1 MB.'); return fs.readFileSync(s,'utf8').slice(0,10000); }
@@ -383,4 +405,4 @@ async function shell(command){
   const c=String(command||'').trim(); if(!c)throw new Error('Command is empty.'); if(c.length>2000)throw new Error('Command too long.'); if(BLOCKED.test(c))throw new Error('That system command is blocked by JARVIS safety policy.');
   return runPS(c,{timeout:20000});
 }
-module.exports={openApp,closeApp,listProcesses,setVolume,key,typeText,hotkey,mouse,screenshot,openUrl,browserSearch,spotifyPlay,fileAction,shell,discoverApplication,discoverStartApp,discoverEpicGame,discoverModrinthProfile,IS_WIN,KNOWN_APPS,WEB_ALIASES};
+module.exports={openApp,closeApp,listProcesses,setVolume,key,typeText,hotkey,mouse,screenshot,openUrl,browserSearch,spotifyPlay,fileAction,shell,systemStatus,activeWindow,networkStatus,pcState,discoverApplication,discoverStartApp,discoverEpicGame,discoverModrinthProfile,IS_WIN,KNOWN_APPS,WEB_ALIASES};

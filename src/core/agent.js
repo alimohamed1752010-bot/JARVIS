@@ -36,6 +36,11 @@ function deterministicAgentPlan(prompt) {
   if(/^(?:incident report|security incident|show incident)$/i.test(raw)) return {summary:'Generate a JARVIS incident report.',needsConfirmation:false,steps:[base('incident_report')]};
   let sm=raw.match(/^schedule\s+(\d+)\s*(s|sec|m|min|h|hr|d|day)s?\s+(.+)$/i);
   if(sm){const mult={s:1000,sec:1000,m:60000,min:60000,h:3600000,hr:3600000,d:86400000,day:86400000}[sm[2].toLowerCase()]||60000;return {summary:`Schedule JARVIS to run: ${sm[3]}`,needsConfirmation:true,steps:[base('schedule_action',{durationMs:Math.min(Number(sm[1])*mult,7*86400000),reason:sm[3].trim()})]};}
+  if (/^(?:what(?:'s| is) (?:running|open)|show (?:me )?(?:what|which) apps are running|list (?:running )?processes)$/i.test(raw)) return {summary:'Inspect running applications and processes on the PC.',needsConfirmation:false,steps:[base('pc_processes')]};
+  if (/^(?:what(?:'s| is) on (?:my )?screen|what(?:'s| is) the active window|which window is active)$/i.test(raw)) return {summary:'Inspect the active Windows window.',needsConfirmation:false,steps:[base('pc_active_window')]};
+  if (/^(?:pc|computer|system) (?:status|health)|^(?:how is|check) (?:my )?(?:pc|computer|system)$/i.test(raw)) return {summary:'Inspect current Windows PC health and resource state.',needsConfirmation:false,steps:[base('pc_state')]};
+  if (/^(?:network|internet|connection) (?:status|health)|^is my internet (?:working|up)$/i.test(raw)) return {summary:'Inspect current Windows network state.',needsConfirmation:false,steps:[base('pc_network_status')]};
+  if (/^(?:take|capture|grab) (?:a )?(?:screenshot|screen shot)$/i.test(raw)) return {summary:'Capture the primary display.',needsConfirmation:false,steps:[base('pc_screenshot')]};
   // Desktop command fallback: natural-language PC requests should never fall through
   // to a conversational reply just because the AI planner is unavailable or chooses
   // not to emit a tool plan. This is intentionally deterministic and only creates
@@ -371,7 +376,7 @@ async function executePlan({message,plan,config,saveConfig,dryRun=false}) {
   const failed=outputs.find(x=>!x.ok||x.verified===false);
   journal.record(config,{action:'PLAN_EXECUTION',actorId:message.author.id,reason:plan.summary,before:null,after:{steps:success,total:plan.steps.length,verified},reversible:false,metadata:{summary:plan.summary,steps:plan.steps.map(s=>s.action)}});
   saveConfig(message.guild.id,config);
-  return {handled:true,text:`**JARVIS V17.3 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
+  return {handled:true,text:`**JARVIS V18.0 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
 }
 
 async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
@@ -382,7 +387,7 @@ async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
   // AI-FIRST ARCHITECTURE: every JARVIS request reaches the AI planner before
   // any regex/deterministic handler. Legacy parsers are emergency fallbacks only.
   const deterministicPlan=deterministicAgentPlan(raw);
-  const session=getSession(config,message.guild.id,message.author.id)||[]; const recentContext=session.slice(-10).map(x=>`${x.role==='model'?'JARVIS':'USER'}: ${String(x.text||'').slice(0,500)}`).join('\n'); const live=await awareness.snapshot(message.guild).catch(()=>null); const liveContext=live?`LIVE SERVER CONTEXT (reference only; do not invent beyond this):\n${awareness.format(live)}`:''; const knowledge=serverKnowledge.context(config,message.guild.id); const plannerPrompt=[liveContext,knowledge,recentContext?`RECENT CONVERSATION CONTEXT:\n${recentContext}`:'',`CURRENT REQUEST:\n${raw}`].filter(Boolean).join('\n\n');
+  const session=getSession(config,message.guild.id,message.author.id)||[]; const recentContext=session.slice(-10).map(x=>`${x.role==='model'?'JARVIS':'USER'}: ${String(x.text||'').slice(0,500)}`).join('\n'); const live=await awareness.snapshot(message.guild).catch(()=>null); const liveContext=live?`LIVE SERVER CONTEXT (reference only; do not invent beyond this):\n${awareness.format(live)}`:''; const knowledge=serverKnowledge.context(config,message.guild.id); let pcContext=''; if(pcBridge.status().connected && /\b(?:pc|computer|system|screen|window|running|open|launch|start|run|play|browser|youtube|gmail|tiktok|spotify|steam|minecraft|rocket league|volume|network|internet)\b/i.test(raw)){ try { const state=await pcBridge.execute('pc_state',{action:'pc_state'},8000); pcContext=`LIVE PC CONTEXT (read-only; may be unavailable or slightly stale):\n${JSON.stringify(state?.details||state).slice(0,8000)}`; } catch(e){ pcContext='LIVE PC CONTEXT: unavailable'; } } const plannerPrompt=[liveContext,knowledge,recentContext?`RECENT CONVERSATION CONTEXT:\n${recentContext}`:'',`CURRENT REQUEST:\n${raw}`].filter(Boolean).join('\n\n');
   let rawPlan=null;
   try { rawPlan=await parseAgentPlan({message,prompt:plannerPrompt}); } catch(e) { console.warn('[AI-FIRST PLANNER]',e?.message||e); }
   // The AI planner is primary, but for PC intent we also reconcile its plan
@@ -391,7 +396,7 @@ async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
   // one action when the model under-plans it. Deterministic actions are only
   // dedicated, allowlisted PC actions and are merged without duplicates.
   if(deterministicPlan?.steps?.length) {
-    const pcActions=new Set(['pc_open_app','pc_open_url','pc_browser_search','pc_spotify_play','pc_volume']);
+    const pcActions=new Set(['pc_open_app','pc_open_url','pc_browser_search','pc_spotify_play','pc_volume','pc_processes','pc_system_status','pc_active_window','pc_network_status','pc_state']);
     if(!rawPlan) rawPlan=deterministicPlan;
     else if(rawPlan.steps?.length) {
       const key=(x)=>`${String(x.action).toLowerCase()}|${String(x.name||'').trim().toLowerCase()}`;

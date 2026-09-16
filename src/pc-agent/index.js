@@ -32,6 +32,10 @@ async function execute(action, step) {
   if (action === 'pc_open_app') { const details=await pc.openApp(step.name, step.targets || []); return { text:`Opened ${step.name}.`, details }; }
   if (action === 'pc_close_app') return { text: await pc.closeApp(step.name) };
   if (action === 'pc_processes') return { text: await pc.listProcesses() };
+  if (action === 'pc_system_status') return { text: JSON.stringify(await pc.systemStatus()), details: await pc.systemStatus() };
+  if (action === 'pc_active_window') return { text: JSON.stringify(await pc.activeWindow()), details: await pc.activeWindow() };
+  if (action === 'pc_network_status') return { text: JSON.stringify(await pc.networkStatus()), details: await pc.networkStatus() };
+  if (action === 'pc_state') return { text: 'PC state collected.', details: await pc.pcState() };
   if (action === 'pc_volume') return { text: await pc.setVolume(step.durationMs) };
   if (action === 'pc_key') return { text: `Sent ${step.name}.`, details: await pc.key(step.name) };
   if (action === 'pc_hotkey') return { text: `Pressed ${step.name}.`, details: await pc.hotkey(step.name) };
