@@ -47,7 +47,22 @@ function deterministicAgentPlan(prompt) {
       const pushApp=(name)=>{ if(!steps.some(x=>x.action==='pc_open_app'&&x.name===name)) steps.push(base('pc_open_app',{name})); };
       // Browser intent: "open youtube" means navigate to YouTube, not a search.
       if(/\b(?:open|launch|start|go to)\s+youtube\b/i.test(raw)) {
-        steps.push(base('pc_open_url',{name:'https://www.youtube.com/'}));
+        steps.push(base('pc_open_url',{name:'https://www.youtube.com/',reason:'brave'}));
+      }
+      // Common web destinations. These are navigation intents, not installed apps.
+      const webAliases={
+        gmail:'https://mail.google.com/',
+        'google mail':'https://mail.google.com/',
+        tiktok:'https://www.tiktok.com/',
+        instagram:'https://www.instagram.com/',
+        facebook:'https://www.facebook.com/',
+        twitch:'https://www.twitch.tv/',
+        reddit:'https://www.reddit.com/',
+        google:'https://www.google.com/'
+      };
+      for(const [name,url] of Object.entries(webAliases)){
+        const re=new RegExp('\\b(?:open|launch|start|go to)\\s+'+name.replace(/ /g,'\\s+')+'\\b','i');
+        if(re.test(raw)) steps.push(base('pc_open_url',{name:url,reason:'brave'}));
       }
       // Stop a browser-search query at the next explicit action, including comma-separated
       // commands. Without this, a sentence like "search YouTube for Minecraft PvP, put on
@@ -67,7 +82,7 @@ function deterministicAgentPlan(prompt) {
       for(const phrase of appWords){
         const m=phrase.match(/(?:open|launch|start|run|play|fire up|get)\s+(.+)/i);
         const candidate=m?.[1]?.trim();
-        if(candidate && !/^(youtube|yt|spotify|brave|brave browser|chrome|google chrome|edge|microsoft edge|rocket league|modrinth|modrinth app|epic|epic games|epic games launcher|minecraft|mc|minecraft launcher)$/i.test(candidate) && !/^(the )?(volume|music|browser)$/i.test(candidate)) pushApp(candidate);
+        if(candidate && !/^(youtube|yt|spotify|brave|brave browser|chrome|google chrome|edge|microsoft edge|rocket league|modrinth|modrinth app|epic|epic games|epic games launcher|minecraft|mc|minecraft launcher|gmail|google mail|tiktok|instagram|facebook|twitch|reddit|google)$/i.test(candidate) && !/^(the )?(volume|music|browser)$/i.test(candidate)) pushApp(candidate);
       }
       const play=raw.match(/\b(?:play|put on)\s+(.+?)(?=\s*(?:,|;)\s*(?:(?:and|then)\s+)?(?:set|make|run|open|launch|start|put\s+on)\b|\s+(?:and|then)\s+(?:set|make|run|open|launch|start)\b|$)/i);
       // "put on Spotify" means launch Spotify, not search Spotify for a track
@@ -345,7 +360,7 @@ async function executePlan({message,plan,config,saveConfig,dryRun=false}) {
   const failed=outputs.find(x=>!x.ok||x.verified===false);
   journal.record(config,{action:'PLAN_EXECUTION',actorId:message.author.id,reason:plan.summary,before:null,after:{steps:success,total:plan.steps.length,verified},reversible:false,metadata:{summary:plan.summary,steps:plan.steps.map(s=>s.action)}});
   saveConfig(message.guild.id,config);
-  return {handled:true,text:`**JARVIS V16.8 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
+  return {handled:true,text:`**JARVIS V16.9 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
 }
 
 async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {

@@ -38,7 +38,7 @@ async function execute(action, step) {
   if (action === 'pc_mouse') return { text: `Clicked ${step.name}.`, details: await pc.mouse(step.name) };
   if (action === 'pc_type') return { text: 'Typed text.', details: await pc.typeText(step.reason) };
   if (action === 'pc_screenshot') return { text: `Screenshot saved to ${await pc.screenshot(step.name)}` };
-  if (action === 'pc_open_url') return { text: await pc.openUrl(step.name) };
+  if (action === 'pc_open_url') return { text: await pc.openUrl(step.name, step.reason || 'brave') };
   if (action === 'pc_spotify_play') return { text: await pc.spotifyPlay(step.name) };
   if (action === 'pc_browser_search') { const r=await pc.browserSearch(step.name, step.reason || 'brave'); return { text:r.text || `Opened YouTube search for ${step.name}.`, details:r.details }; }
   if (action.startsWith('pc_file_')) return { text: await pc.fileAction(action.replace('pc_file_', ''), step.name, step.reason) };

@@ -66,17 +66,42 @@ function appMatchScore(name,query){
 async function discoverStartApp(query){
   const apps=await startMenuApps();
   const matches=apps.map(a=>({...a,score:appMatchScore(a.Name,query)})).filter(a=>a.score>=0).sort((a,b)=>b.score-a.score||a.Name.localeCompare(b.Name));
-  if(!matches.length)return null;
-  const top=matches[0];
-  if(matches.length>1 && matches[1].score===top.score) return {ambiguous:true,matches:matches.slice(0,8)};
-  return top;
+  if(matches.length){
+    const top=matches[0];
+    if(matches.length>1 && matches[1].score===top.score) return {ambiguous:true,matches:matches.slice(0,8)};
+    return top;
+  }
+  return discoverInstalledRegistration(query);
 }
+
+async function discoverInstalledRegistration(query){
+  const encoded=Buffer.from(String(query||''),'utf8').toString('base64');
+  const ps=`$q=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')); $roots=@('HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'); $out=@(); foreach($r in $roots){ Get-ItemProperty $r -ErrorAction SilentlyContinue | ForEach-Object { if($_.DisplayName){ $out += [PSCustomObject]@{Name=[string]$_.DisplayName; InstallLocation=[string]$_.InstallLocation; DisplayIcon=[string]$_.DisplayIcon} } } }; $out | ConvertTo-Json -Compress`;
+  let out=''; try{out=await runPS(ps);}catch{return null;}
+  if(!out)return null;
+  let entries=[]; try{const parsed=JSON.parse(out);entries=Array.isArray(parsed)?parsed:[parsed];}catch{return null;}
+  const matches=entries.map(x=>({...x,score:appMatchScore(x.Name,query)})).filter(x=>x.score>=0).sort((x,y)=>y.score-x.score||x.Name.localeCompare(y.Name));
+  if(!matches.length)return null;
+  if(matches.length>1 && matches[1].score===matches[0].score)return {ambiguous:true,matches:matches.slice(0,8)};
+  return {...matches[0],AppID:'',source:'Registry'};
+}
+
 async function startStartMenuApp(appId,args=[]){
   const encoded=Buffer.from(String(appId),'utf8').toString('base64');
   const argEncoded=Buffer.from(JSON.stringify(args||[]),'utf8').toString('base64');
   const ps=`$id=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')); $json=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${argEncoded}')); $args=@(); try {$args=ConvertFrom-Json $json} catch {}; Start-Process ('shell:AppsFolder\\'+$id) -ArgumentList $args`;
   await runPS(ps);
   return {started:true,via:'StartMenu',appId};
+}
+
+async function launchRegistryApp(entry,args=[]){
+  const candidates=[];
+  const icon=String(entry.DisplayIcon||'').replace(/^\"|\"$/g,'').trim();
+  const location=String(entry.InstallLocation||'').trim();
+  if(icon)candidates.push(icon.split(',')[0].replace(/^\"|\"$/g,'').trim());
+  if(location && fs.existsSync(location)){try{for(const f of fs.readdirSync(location,{withFileTypes:true}).filter(x=>x.isFile()&&x.name.toLowerCase().endsWith('.exe')))candidates.push(path.join(location,f.name));}catch{}}
+  for(const candidate of candidates){if(candidate&&fs.existsSync(candidate)){await spawnApp(candidate,args);return {started:true,via:'Registry',executable:candidate};}}
+  throw new Error(`I found installed registration for "${entry.Name}" but could not resolve its launch executable.`);
 }
 
 async function discoverEpicGame(query){
@@ -190,7 +215,7 @@ async function openApp(app,args=[]){
   // arbitrary installed apps work without a hardcoded executable path.
   const start=await discoverStartApp(requested);
   if(start?.ambiguous) throw new Error(`Multiple installed apps matched "${requested}": ${start.matches.map(x=>x.Name).join(', ')}.`);
-  if(start) return startStartMenuApp(start.AppID,args);
+  if(start) return start.AppID ? startStartMenuApp(start.AppID,args) : launchRegistryApp(start,args);
   // PATH and a small set of dynamic install roots remain a fallback for apps that do not register in Start.
   const exe={chrome:'chrome.exe',brave:'brave.exe',msedge:'msedge.exe',discord:'discord.exe',code:'code.exe',spotify:'Spotify.exe'}[a] || `${a}.exe`;
   try{
@@ -326,12 +351,16 @@ async function spotifyPlay(query) {
   return `Spotify search opened for “${q}”.`;
 }
 
-async function openUrl(url){
+async function openUrl(url,browser='brave'){
   const u=String(url||'').trim();
   if(!/^https?:\/\//i.test(u))throw new Error('URL must start with http:// or https://');
   if(u.length>2000)throw new Error('URL is too long.');
-  await spawnApp('cmd.exe',['/c','start','',u]);
-  return `Opened ${u}`;
+  // Web URLs must use the same verified browser path as YouTube search.
+  // `cmd /c start` only proves Windows accepted the request, not that a browser
+  // actually launched, which previously let JARVIS claim success when nothing opened.
+  const b=normalizeApp(browser||'brave');
+  const result=await openBrowserUrl(u,b);
+  return `Opened ${u} in ${b}.`;
 }
 async function fileAction(action,src,dst){
   const s=path.resolve(String(src||'')); if(!s||s===path.parse(s).root)throw new Error('Unsafe file path.');
