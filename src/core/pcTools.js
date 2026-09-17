@@ -233,7 +233,7 @@ async function openApp(app,args=[]){
   throw new Error(`I couldn't discover an installed application named "${requested}". I checked Windows app registrations and dynamic executable discovery.`);
 }
 const PROCESS_ALIASES={
-  spotify:['Spotify','SpotifyAB.SpotifyMusic'], discord:['Discord'], brave:['brave'], chrome:['chrome'], msedge:['msedge'],
+  spotify:['Spotify'], discord:['Discord'], brave:['brave'], chrome:['chrome'], msedge:['msedge'],
   steam:['steam'], epicgameslauncher:['EpicGamesLauncher'], code:['Code'], obs:['obs64','obs32'],
   explorer:['explorer'], taskmgr:['Taskmgr'], notepad:['notepad'], calc:['CalculatorApp','calc'],
   minecraft:['MinecraftLauncher','Minecraft'], modrinth:['Modrinth App','ModrinthApp'],
@@ -246,20 +246,9 @@ async function closeApp(app){
   const names=PROCESS_ALIASES[a] || [`${a}`];
   const encoded=names.map(psEscape);
   const filter=encoded.map(n=>`$names -contains $_.ProcessName`).join(' -or ');
-  const script=`$names=@(${encoded.map(n=>"'${n}'").join(',')}); $targets=@(Get-Process -ErrorAction SilentlyContinue | Where-Object { ${filter} }); $count=$targets.Count; if($count -gt 0){ $targets | Stop-Process -Force -ErrorAction Stop }; $count`;
+  const script=`$names=@(${encoded.map(n=>"'${n}'").join(',')}); $targets=Get-Process -ErrorAction SilentlyContinue | Where-Object { ${filter} }; $count=@($targets).Count; if($count -gt 0){ $targets | Stop-Process -Force -ErrorAction Stop }; $count`;
   const out=await runPS(script,{timeout:12000});
-  let count=Number.parseInt(String(out||'0').trim(),10)||0;
-
-  // Spotify can be installed as the Microsoft Store package and may expose a
-  // different process name from the classic desktop client. Only Spotify-specific
-  // package/process names are considered here; never broaden this into a wildcard
-  // that could terminate unrelated applications.
-  if(count===0 && a==='spotify'){
-    try {
-      const spotifyScript=`$targets=@(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -in @('Spotify','SpotifyAB.SpotifyMusic') }); $count=$targets.Count; if($count -gt 0){ $targets | Stop-Process -Force -ErrorAction Stop }; $count`;
-      count=Number.parseInt(String(await runPS(spotifyScript,{timeout:12000})||'0').trim(),10)||0;
-    } catch {}
-  }
+  const count=Number.parseInt(String(out||'0').trim(),10)||0;
   if(count===0) throw new Error(`${catalogAppDisplay(app)} is not currently running.`);
   return `Closed ${catalogAppDisplay(app)}.`;
 }
