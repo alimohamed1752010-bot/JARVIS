@@ -1,12 +1,13 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "18.8.0",
-  "description": "JARVIS V18.8 - unified Discord + PC assistant with safe Spotify playback and mixed-action routing",
+  "version": "19.0.0",
+  "description": "JARVIS V19.0 - push-to-talk voice PC + Discord assistant",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "deploy": "node src/deploy-commands.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "voice": "node src/pc-agent/voice.js"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",

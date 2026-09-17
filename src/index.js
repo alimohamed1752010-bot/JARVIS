@@ -24,7 +24,31 @@ const {
 
 if (String(process.env.DASHBOARD_ENABLED||'false').toLowerCase() !== 'true') {
   const http = require('node:http');
-  const bridgeServer = http.createServer((req,res)=>{res.writeHead(200,{'Content-Type':'text/plain'});res.end('JARVIS PC Bridge ONLINE');});
+  const bridgeServer = http.createServer(async (req,res)=>{
+    if (req.method === 'POST' && req.url === '/voice') {
+      try {
+        const expected=String(process.env.PC_AGENT_TOKEN||'').trim();
+        const supplied=String(req.headers['x-jarvis-voice-token']||'').trim();
+        if (!expected || supplied !== expected) { res.writeHead(401,{'Content-Type':'application/json'}); res.end(JSON.stringify({ok:false,error:'Unauthorized'})); return; }
+        let body=''; req.setEncoding('utf8');
+        for await (const chunk of req) { body += chunk; if(body.length>20000) throw new Error('Request too large.'); }
+        const data=JSON.parse(body||'{}');
+        const guildId=String(data.guildId||'').trim(); const userId=String(data.userId||'').trim(); const text=String(data.text||'').trim();
+        if(!guildId || !userId || !text) throw new Error('guildId, userId and text are required.');
+        const guild=client.guilds.cache.get(guildId); if(!guild) throw new Error('Configured voice guild is not available.');
+        const member=await guild.members.fetch(userId).catch(()=>null); if(!member) throw new Error('Configured voice user is not in the guild.');
+        const cfg=getConfig(guild.id);
+        const fakeChannel={id:'VOICE_SESSION',name:'voice-session',isTextBased:()=>true,send:async()=>null};
+        const message={guild,author:{id:userId,tag:member.user?.tag||member.user?.username||userId},member,channel:fakeChannel,mentions:{channels:{first:()=>null}},reply:async()=>null};
+        const agent=require('./core/agent');
+        const pendingResult=await agent.confirmPending({message,text,config:cfg,saveConfig}).catch(()=>null);
+        const result=pendingResult || await agent.runAgent({message,prompt:text,config:cfg,saveConfig,confirmed:false});
+        res.writeHead(200,{'Content-Type':'application/json'}); res.end(JSON.stringify({ok:true,handled:Boolean(result?.handled),text:String(result?.text||'')}));
+      } catch(e) { res.writeHead(400,{'Content-Type':'application/json'}); res.end(JSON.stringify({ok:false,error:String(e?.message||e)})); }
+      return;
+    }
+    res.writeHead(200,{'Content-Type':'text/plain'});res.end('JARVIS PC Bridge ONLINE');
+  });
   bridgeServer.listen(Number(process.env.PORT||3000),()=>pcBridge.start(bridgeServer));
 }
 
