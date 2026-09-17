@@ -27,9 +27,21 @@ function parseNaturalDuration(text){const m=String(text||'').match(/(\d+(?:\.\d+
 // The AI planner remains the primary natural-language planner, but a temporary
 // model failure must not turn a clearly structured request into "no valid plan".
 function deterministicAgentPlan(prompt) {
-  const raw=String(prompt||'').replace(/^(?:(?:yo|hey|hi|ok|okay)\s+)?jarvis\b[,:!\s-]*/i,'').trim().replace(/^(?:yo\s+)?(?:get\s+everything\s+ready|everything\s+ready)[.!,:;\s-]*/i,'').trim();
+  let raw=String(prompt||'').replace(/^(?:(?:yo|hey|hi|ok|okay)\s+)?jarvis\b[,:!\s-]*/i,'').trim().replace(/^(?:yo\s+)?(?:get\s+everything\s+ready|everything\s+ready)[.!,:;\s-]*/i,'').trim();
   if(!raw)return null;
   const base=(action,extra={})=>({action,targets:[],excludeTargets:[],source:'',destination:'',role:'',channel:'',parent:'',channelType:'text',name:'',permissionChanges:[],reason:'Owner-directed JARVIS action',durationMs:600000,...extra});
+
+  // V18.8: preserve mixed PC + Discord commands as one ordered plan.
+  // Example: "open tiktok then time oraby out for 1 minute" must execute
+  // the navigation AND the timeout instead of letting the PC plan swallow the
+  // moderation half. The timeout clause is extracted only when it is an
+  // explicit terminal "time <target> out [for <duration>]" phrase.
+  let extractedTimeout=null;
+  const timeoutMatch=raw.match(/(?:^|\s+(?:and|then)\s+|[,;]\s*)time\s+(.+?)\s+out(?:\s+for\s+(.+?))?$/i);
+  if(timeoutMatch){
+    extractedTimeout={target:timeoutMatch[1].trim(),durationMs:timeoutMatch[2]?parseNaturalDuration(timeoutMatch[2]):10*60*1000};
+    raw=raw.slice(0,timeoutMatch.index).replace(/(?:[,;]|\b(?:and|then))\s*$/i,'').trim();
+  }
   const previewMatch=raw.match(/^(?:preview|simulate|dry run|dry-run)\s+(.+)$/i);
   if(previewMatch){ const p=deterministicAgentPlan(previewMatch[1]); if(p) return p; }
   if(/^(?:show|view)\s+(?:action )?history(?:\s+(\d+))?$/i.test(raw)) return {summary:'Show recent JARVIS action history.',needsConfirmation:false,steps:[base('history')]};
@@ -74,9 +86,16 @@ function deterministicAgentPlan(prompt) {
         reddit:'https://www.reddit.com/',
         google:'https://www.google.com/'
       };
+      const webOpenSteps=[];
       for(const [name,url] of Object.entries(webAliases)){
-        const re=new RegExp('\\b(?:open|launch|start|go to)\\s+'+name.replace(/ /g,'\\s+')+'\\b','i');
-        if(re.test(raw)) steps.push(base('pc_open_url',{name:url,reason:'brave'}));
+        const escapedName=name.replace(/ /g,'\\s+');
+        const re=new RegExp('(?:\\b(?:open|launch|start|go to)\\s+'+escapedName+'\\b|\\b(?:and|then)\\s+'+escapedName+'\\b)','i');
+        const hit=re.exec(raw);
+        if(hit) webOpenSteps.push({step:base('pc_open_url',{name:url,reason:'brave'}),index:hit.index});
+      }
+      webOpenSteps.sort((a,b)=>a.index-b.index);
+      for(const item of webOpenSteps){
+        if(!steps.some(x=>x.action==='pc_open_url'&&x.name===item.step.name)) steps.push(item.step);
       }
       // Broad website catalog: navigation is always treated as a URL intent first.
       // This keeps hundreds of common sites from falling through to conversational AI.
@@ -124,7 +143,10 @@ function deterministicAgentPlan(prompt) {
       const vol=raw.match(/(?:set|make)\s+(?:the\s+)?volume\s+(?:to\s+)?(\d{1,3})\s*%?/i);
       if(vol) steps.push(base('pc_volume',{durationMs:Math.max(0,Math.min(100,Number(vol[1])))}));
       if(/\b(?:run|open|launch|start|play|fire up|get)\s+(?:minecraft|mc|minecraft java)\b/i.test(raw)) pushApp('Minecraft');
-      if(steps.length) return {summary:'Execute the requested Windows desktop actions.',needsConfirmation:false,steps};
+      if(extractedTimeout){
+        steps.push(base('timeout',{targets:[extractedTimeout.target],durationMs:extractedTimeout.durationMs}));
+      }
+      if(steps.length) return {summary:extractedTimeout?'Execute the requested PC and Discord actions in order.':'Execute the requested Windows desktop actions.',needsConfirmation:Boolean(extractedTimeout),steps};
     }
   }
   if(/^schedule\s+list$/i.test(raw)) return {summary:'List scheduled JARVIS actions.',needsConfirmation:false,steps:[base('schedule_list')]};
