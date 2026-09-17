@@ -1,0 +1,236 @@
+{
+  "welcomeChannelId": null,
+  "logChannelId": null,
+  "welcomeMessage": "Welcome {user} to **{server}**! 🎉",
+  "muteRoleId": null,
+  "autoroleId": null,
+  "verificationRoleId": null,
+  "verificationChannelId": null,
+  "ticketCategoryId": null,
+  "ticketLogChannelId": null,
+  "automod": {
+    "enabled": false,
+    "antiSpam": true,
+    "antiLinks": false,
+    "antiInvites": true,
+    "maxMentions": 5,
+    "spamWindowMs": 6000,
+    "spamMaxMessages": 6,
+    "blockedWords": []
+  },
+  "antiRaid": {
+    "enabled": false,
+    "joins": 8,
+    "windowMs": 10000,
+    "lockdown": false
+  },
+  "lockdown": false,
+  "cases": [],
+  "customCommands": {},
+  "reminders": [],
+  "warnings": {},
+  "ai": {
+    "memory": {},
+    "facts": {},
+    "personality": "classic",
+    "dailyBriefing": {
+      "enabled": false,
+      "channelId": null,
+      "hour": 9
+    },
+    "sessions": {},
+    "sessionSummaries": {},
+    "usage": {},
+    "settings": {
+      "responseStyle": "adaptive",
+      "webSearch": true,
+      "autoSummarize": true
+    }
+  },
+  "warningEscalation": {
+    "enabled": false,
+    "levels": {}
+  },
+  "security": {
+    "antiNuke": true
+  },
+  "v12": {
+    "autopilot": {
+      "enabled": false
+    },
+    "snapshots": {
+      "disabled": false,
+      "items": []
+    }
+  },
+  "v13": {
+    "knowledge": {
+      "1483583961287626894": {
+        "facts": [],
+        "events": [],
+        "lastScan": "2026-09-17T10:38:11.215Z",
+        "behavior": {},
+        "anomalies": [],
+        "cached": {
+          "memberCount": 17,
+          "roles": [
+            {
+              "id": "1483583961287626894",
+              "name": "@everyone",
+              "position": 0,
+              "permissions": "2222085186637377"
+            },
+            {
+              "id": "1489731885088116887",
+              "name": "أوبتمس برايم",
+              "position": 7,
+              "permissions": "0"
+            },
+            {
+              "id": "1489731969653932032",
+              "name": "بيكاتشو",
+              "position": 6,
+              "permissions": "0"
+            },
+            {
+              "id": "1489732535209689129",
+              "name": "ميدوريا",
+              "position": 5,
+              "permissions": "0"
+            },
+            {
+              "id": "1489732580189409351",
+              "name": "الغالي",
+              "position": 4,
+              "permissions": "0"
+            },
+            {
+              "id": "1546843920783118456",
+              "name": "علي المصري جدا جدا",
+              "position": 1,
+              "permissions": "2003310185283583"
+            }
+          ],
+          "channels": [
+            {
+              "id": "1483583961287626896",
+              "name": "Text Channels",
+              "type": 4,
+              "parentId": null,
+              "position": 0
+            },
+            {
+              "id": "1483583961287626897",
+              "name": "Voice Channels",
+              "type": 4,
+              "parentId": null,
+              "position": 0
+            },
+            {
+              "id": "1483583961832755422",
+              "name": "general",
+              "type": 0,
+              "parentId": "1483583961287626896",
+              "position": 0
+            },
+            {
+              "id": "1483583961832755423",
+              "name": "General",
+              "type": 2,
+              "parentId": "1483583961287626897",
+              "position": 0
+            },
+            {
+              "id": "1484620882185027784",
+              "name": "اه فويس شات",
+              "type": 2,
+              "parentId": null,
+              "position": 1
+            },
+            {
+              "id": "1546844900195049483",
+              "name": "rules",
+              "type": 0,
+              "parentId": null,
+              "position": 0
+            },
+            {
+              "id": "1546844900195049486",
+              "name": "moderator-only",
+              "type": 0,
+              "parentId": null,
+              "position": 0
+            },
+            {
+              "id": "1546845534105374780",
+              "name": "Suckaniggadih🥵",
+              "type": 13,
+              "parentId": null,
+              "position": 0
+            }
+          ],
+          "voice": [
+            {
+              "id": "1483583961832755423",
+              "name": "General",
+              "members": [
+                "894658304209473587",
+                "917045884968136795"
+              ]
+            },
+            {
+              "id": "1484620882185027784",
+              "name": "اه فويس شات",
+              "members": []
+            },
+            {
+              "id": "1546845534105374780",
+              "name": "Suckaniggadih🥵",
+              "members": []
+            }
+          ]
+        }
+      }
+    },
+    "learning": {
+      "enabled": true,
+      "minObservations": 3
+    }
+  },
+  "v14": {
+    "reasoning": {},
+    "autopilot": {
+      "correlation": true
+    }
+  },
+  "v9": {
+    "actionJournal": [],
+    "memory": {
+      "server": {},
+      "users": {},
+      "preferences": {}
+    },
+    "nextActionId": 1,
+    "eventAwareness": {
+      "enabled": true,
+      "voiceMoves": false,
+      "logVoiceMoves": false,
+      "channels": false,
+      "roles": false,
+      "members": false,
+      "moderation": false
+    },
+    "confirmations": {
+      "enabled": true,
+      "destructiveActions": [
+        "ban",
+        "kick",
+        "timeout"
+      ]
+    },
+    "simulation": {
+      "enabled": true
+    },
+    "commandContextTtlMs": 60000
+  }
+}

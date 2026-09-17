@@ -1,0 +1,601 @@
+{
+  "welcomeChannelId": null,
+  "logChannelId": null,
+  "welcomeMessage": "Welcome {user} to **{server}**! 🎉",
+  "muteRoleId": null,
+  "autoroleId": null,
+  "verificationRoleId": null,
+  "verificationChannelId": null,
+  "ticketCategoryId": null,
+  "ticketLogChannelId": null,
+  "automod": {
+    "enabled": false,
+    "antiSpam": true,
+    "antiLinks": false,
+    "antiInvites": true,
+    "maxMentions": 5,
+    "spamWindowMs": 6000,
+    "spamMaxMessages": 6,
+    "blockedWords": []
+  },
+  "antiRaid": {
+    "enabled": false,
+    "joins": 8,
+    "windowMs": 10000,
+    "lockdown": false
+  },
+  "lockdown": false,
+  "cases": [],
+  "customCommands": {},
+  "reminders": [],
+  "warnings": {},
+  "ai": {
+    "memory": {},
+    "facts": {},
+    "personality": "classic",
+    "dailyBriefing": {
+      "enabled": false,
+      "channelId": null,
+      "hour": 9
+    },
+    "sessions": {},
+    "sessionSummaries": {},
+    "usage": {},
+    "settings": {
+      "responseStyle": "adaptive",
+      "webSearch": true,
+      "autoSummarize": true
+    }
+  },
+  "warningEscalation": {
+    "enabled": false,
+    "levels": {}
+  },
+  "security": {
+    "antiNuke": true
+  },
+  "v12": {
+    "autopilot": {
+      "enabled": false
+    },
+    "snapshots": {
+      "disabled": false,
+      "items": []
+    }
+  },
+  "v13": {
+    "knowledge": {
+      "1449359799518105674": {
+        "facts": [],
+        "events": [],
+        "lastScan": "2026-09-17T10:38:10.750Z",
+        "behavior": {},
+        "anomalies": [],
+        "cached": {
+          "memberCount": 64,
+          "roles": [
+            {
+              "id": "1543288515260059770",
+              "name": "oraby's #1 hater",
+              "position": 5,
+              "permissions": "4398046511104"
+            },
+            {
+              "id": "1541459770488135751",
+              "name": "حسام العوضي (.)",
+              "position": 28,
+              "permissions": "0"
+            },
+            {
+              "id": "1547793686740607166",
+              "name": "new role",
+              "position": 1,
+              "permissions": "0"
+            },
+            {
+              "id": "1465453484038951057",
+              "name": "niggas",
+              "position": 13,
+              "permissions": "0"
+            },
+            {
+              "id": "1529202250461741279",
+              "name": "خليفه هتلر في قتل اليهود",
+              "position": 19,
+              "permissions": "1721807559684039"
+            },
+            {
+              "id": "1540102013344292874",
+              "name": "Sir’s Twin",
+              "position": 9,
+              "permissions": "6224324691709505"
+            },
+            {
+              "id": "1449359799899914383",
+              "name": "Owner",
+              "position": 40,
+              "permissions": "8864258447638527"
+            },
+            {
+              "id": "1530343415957553182",
+              "name": "صدام حسين",
+              "position": 22,
+              "permissions": "0"
+            },
+            {
+              "id": "1449359799899914381",
+              "name": "Head Moderator",
+              "position": 29,
+              "permissions": "1717409311878983"
+            },
+            {
+              "id": "1544762791498616852",
+              "name": "the writer or smth like that",
+              "position": 14,
+              "permissions": "4398046511104"
+            },
+            {
+              "id": "1512295139887022160",
+              "name": "KOSHARY 95",
+              "position": 27,
+              "permissions": "0"
+            },
+            {
+              "id": "1549180766397927434",
+              "name": "كشري التحرير الفيك عشان كشري واحد بس",
+              "position": 24,
+              "permissions": "0"
+            },
+            {
+              "id": "1498728033752977408",
+              "name": "Muted",
+              "position": 12,
+              "permissions": "0"
+            },
+            {
+              "id": "1509723190551646248",
+              "name": "مدير الحزب العربي الاشتراكي",
+              "position": 23,
+              "permissions": "39722006380544"
+            },
+            {
+              "id": "1538831648353947679",
+              "name": "🤍",
+              "position": 10,
+              "permissions": "0"
+            },
+            {
+              "id": "1504596192179523664",
+              "name": "yellow nigga",
+              "position": 32,
+              "permissions": "1704216984289223"
+            },
+            {
+              "id": "1494751913764192467",
+              "name": "Administrator",
+              "position": 30,
+              "permissions": "1721807559716807"
+            },
+            {
+              "id": "1449359799518105674",
+              "name": "@everyone",
+              "position": 0,
+              "permissions": "211248003534401"
+            },
+            {
+              "id": "1449359799518105675",
+              "name": "Bot",
+              "position": 17,
+              "permissions": "0"
+            },
+            {
+              "id": "1493688899057352795",
+              "name": "اسي البلقاسي",
+              "position": 20,
+              "permissions": "0"
+            },
+            {
+              "id": "1495718578370904165",
+              "name": "semely",
+              "position": 31,
+              "permissions": "8"
+            },
+            {
+              "id": "1460667611594625065",
+              "name": "Big .T",
+              "position": 36,
+              "permissions": "8"
+            },
+            {
+              "id": "1537818935905493134",
+              "name": "البنات البنات اشطر الكائنات or whatever",
+              "position": 18,
+              "permissions": "1125899906842624"
+            },
+            {
+              "id": "1501898686416949318",
+              "name": "Anti-Timeout",
+              "position": 33,
+              "permissions": "1721807559716807"
+            },
+            {
+              "id": "1449359799870296183",
+              "name": "Moderator",
+              "position": 26,
+              "permissions": "567485442359873"
+            },
+            {
+              "id": "1494019454789484617",
+              "name": "24 Kerat",
+              "position": 35,
+              "permissions": "8"
+            },
+            {
+              "id": "1540875136062988318",
+              "name": "Gay asf",
+              "position": 8,
+              "permissions": "0"
+            },
+            {
+              "id": "1543287834436440074",
+              "name": "#1 DMC GLAZER",
+              "position": 6,
+              "permissions": "4398046511104"
+            },
+            {
+              "id": "1538207523314602055",
+              "name": "Zorg",
+              "position": 34,
+              "permissions": "8"
+            },
+            {
+              "id": "1537597746314219591",
+              "name": "‍͏‍͏‍‍͏‍͏‍͏‍͏‍‍‍͏‍͏‍͏‍‍͏‍͏‍͏‍͏‍‍‍",
+              "position": 39,
+              "permissions": "8864262742605823"
+            },
+            {
+              "id": "1544033173279735908",
+              "name": "Epstein",
+              "position": 4,
+              "permissions": "4400193994752"
+            },
+            {
+              "id": "1547594390485205042",
+              "name": "Rocket League",
+              "position": 2,
+              "permissions": "0"
+            },
+            {
+              "id": "1546972083223789672",
+              "name": "انا مع الطفل",
+              "position": 21,
+              "permissions": "0"
+            },
+            {
+              "id": "1541816546693742612",
+              "name": "Welcome Back Sir",
+              "position": 38,
+              "permissions": "8864262743130111"
+            },
+            {
+              "id": "1539946579656712312",
+              "name": "smarter niggas",
+              "position": 15,
+              "permissions": "0"
+            }
+          ],
+          "channels": [
+            {
+              "id": "1449359800768008411",
+              "name": "💬 General",
+              "type": 4,
+              "parentId": null,
+              "position": 0
+            },
+            {
+              "id": "1449359801111937055",
+              "name": "norule-general",
+              "type": 0,
+              "parentId": "1449359800768008411",
+              "position": 6
+            },
+            {
+              "id": "1449359801111937056",
+              "name": "bot-commands",
+              "type": 0,
+              "parentId": "1449359800768008411",
+              "position": 8
+            },
+            {
+              "id": "1449359801111937058",
+              "name": "vip-chat",
+              "type": 0,
+              "parentId": "1449359800768008411",
+              "position": 7
+            },
+            {
+              "id": "1449359801111937059",
+              "name": "🔊 General 1",
+              "type": 2,
+              "parentId": "1449359800768008411",
+              "position": 1
+            },
+            {
+              "id": "1449359801111937060",
+              "name": "🔊 General 2",
+              "type": 2,
+              "parentId": "1449359800768008411",
+              "position": 2
+            },
+            {
+              "id": "1449359801111937061",
+              "name": "🚧 Staff",
+              "type": 4,
+              "parentId": null,
+              "position": 1
+            },
+            {
+              "id": "1449359801111937063",
+              "name": "mod-chat",
+              "type": 0,
+              "parentId": "1449359801111937061",
+              "position": 12
+            },
+            {
+              "id": "1449359801111937064",
+              "name": "head-mod-chat",
+              "type": 0,
+              "parentId": "1449359801111937061",
+              "position": 14
+            },
+            {
+              "id": "1449359801401212980",
+              "name": "admin-chat",
+              "type": 0,
+              "parentId": "1449359801111937061",
+              "position": 13
+            },
+            {
+              "id": "1449359801401212982",
+              "name": "logs",
+              "type": 0,
+              "parentId": "1449359801111937061",
+              "position": 15
+            },
+            {
+              "id": "1449359801401212983",
+              "name": "Mod Chat",
+              "type": 2,
+              "parentId": "1449359801111937061",
+              "position": 10
+            },
+            {
+              "id": "1449359801401212984",
+              "name": "Admin Chat",
+              "type": 2,
+              "parentId": "1449359801111937061",
+              "position": 8
+            },
+            {
+              "id": "1458590354466148422",
+              "name": "i-hate-niggas",
+              "type": 0,
+              "parentId": "1449359800768008411",
+              "position": 11
+            },
+            {
+              "id": "1465676056370479148",
+              "name": "minecraft-server",
+              "type": 0,
+              "parentId": null,
+              "position": 2
+            },
+            {
+              "id": "1475955393392804011",
+              "name": "🔊 General 3",
+              "type": 2,
+              "parentId": "1449359800768008411",
+              "position": 3
+            },
+            {
+              "id": "1486393296950395131",
+              "name": "minecraft-chat",
+              "type": 0,
+              "parentId": "1449359800768008411",
+              "position": 10
+            },
+            {
+              "id": "1487866854914523206",
+              "name": "🔊 General 69",
+              "type": 2,
+              "parentId": "1449359800768008411",
+              "position": 4
+            },
+            {
+              "id": "1492535136338841822",
+              "name": "rules",
+              "type": 0,
+              "parentId": null,
+              "position": 0
+            },
+            {
+              "id": "1493228793161318564",
+              "name": "movietime",
+              "type": 0,
+              "parentId": null,
+              "position": 4
+            },
+            {
+              "id": "1498050130891374796",
+              "name": "private disscusions (say gex)",
+              "type": 2,
+              "parentId": "1449359801111937061",
+              "position": 9
+            },
+            {
+              "id": "1511717858470789383",
+              "name": "🔊Secret 1",
+              "type": 2,
+              "parentId": "1449359800768008411",
+              "position": 5
+            },
+            {
+              "id": "1530871921300869132",
+              "name": "general",
+              "type": 0,
+              "parentId": "1449359800768008411",
+              "position": 5
+            },
+            {
+              "id": "1537826849562955776",
+              "name": "MovieNight",
+              "type": 13,
+              "parentId": "1449359800768008411",
+              "position": 0
+            },
+            {
+              "id": "1538832027514576916",
+              "name": "🤍",
+              "type": 0,
+              "parentId": "1449359800768008411",
+              "position": 9
+            },
+            {
+              "id": "1538837280028893214",
+              "name": "random-bullshit",
+              "type": 0,
+              "parentId": null,
+              "position": 3
+            },
+            {
+              "id": "1541459006155919472",
+              "name": "jarvis-test",
+              "type": 0,
+              "parentId": "1449359801111937061",
+              "position": 16
+            },
+            {
+              "id": "1541477679503507466",
+              "name": "🔊Secret 2",
+              "type": 2,
+              "parentId": "1449359800768008411",
+              "position": 6
+            },
+            {
+              "id": "1542860155274919946",
+              "name": "announcements",
+              "type": 0,
+              "parentId": null,
+              "position": 1
+            },
+            {
+              "id": "1546972603351171132",
+              "name": "انا مع الطفل",
+              "type": 2,
+              "parentId": "1449359800768008411",
+              "position": 7
+            }
+          ],
+          "voice": [
+            {
+              "id": "1449359801111937059",
+              "name": "🔊 General 1",
+              "members": []
+            },
+            {
+              "id": "1449359801111937060",
+              "name": "🔊 General 2",
+              "members": []
+            },
+            {
+              "id": "1449359801401212983",
+              "name": "Mod Chat",
+              "members": []
+            },
+            {
+              "id": "1449359801401212984",
+              "name": "Admin Chat",
+              "members": []
+            },
+            {
+              "id": "1475955393392804011",
+              "name": "🔊 General 3",
+              "members": []
+            },
+            {
+              "id": "1487866854914523206",
+              "name": "🔊 General 69",
+              "members": []
+            },
+            {
+              "id": "1498050130891374796",
+              "name": "private disscusions (say gex)",
+              "members": []
+            },
+            {
+              "id": "1511717858470789383",
+              "name": "🔊Secret 1",
+              "members": []
+            },
+            {
+              "id": "1537826849562955776",
+              "name": "MovieNight",
+              "members": []
+            },
+            {
+              "id": "1541477679503507466",
+              "name": "🔊Secret 2",
+              "members": []
+            },
+            {
+              "id": "1546972603351171132",
+              "name": "انا مع الطفل",
+              "members": []
+            }
+          ]
+        }
+      }
+    },
+    "learning": {
+      "enabled": true,
+      "minObservations": 3
+    }
+  },
+  "v14": {
+    "reasoning": {},
+    "autopilot": {
+      "correlation": true
+    }
+  },
+  "v9": {
+    "actionJournal": [],
+    "memory": {
+      "server": {},
+      "users": {},
+      "preferences": {}
+    },
+    "nextActionId": 1,
+    "eventAwareness": {
+      "enabled": true,
+      "voiceMoves": false,
+      "logVoiceMoves": false,
+      "channels": false,
+      "roles": false,
+      "members": false,
+      "moderation": false
+    },
+    "confirmations": {
+      "enabled": true,
+      "destructiveActions": [
+        "ban",
+        "kick",
+        "timeout"
+      ]
+    },
+    "simulation": {
+      "enabled": true
+    },
+    "commandContextTtlMs": 60000
+  }
+}

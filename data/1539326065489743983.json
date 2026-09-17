@@ -1,0 +1,216 @@
+{
+  "welcomeChannelId": null,
+  "logChannelId": null,
+  "welcomeMessage": "Welcome {user} to **{server}**! 🎉",
+  "muteRoleId": null,
+  "autoroleId": null,
+  "verificationRoleId": null,
+  "verificationChannelId": null,
+  "ticketCategoryId": null,
+  "ticketLogChannelId": null,
+  "automod": {
+    "enabled": false,
+    "antiSpam": true,
+    "antiLinks": false,
+    "antiInvites": true,
+    "maxMentions": 5,
+    "spamWindowMs": 6000,
+    "spamMaxMessages": 6,
+    "blockedWords": []
+  },
+  "antiRaid": {
+    "enabled": false,
+    "joins": 8,
+    "windowMs": 10000,
+    "lockdown": false
+  },
+  "lockdown": false,
+  "cases": [],
+  "customCommands": {},
+  "reminders": [],
+  "warnings": {},
+  "ai": {
+    "memory": {},
+    "facts": {},
+    "personality": "classic",
+    "dailyBriefing": {
+      "enabled": false,
+      "channelId": null,
+      "hour": 9
+    },
+    "sessions": {},
+    "sessionSummaries": {},
+    "usage": {},
+    "settings": {
+      "responseStyle": "adaptive",
+      "webSearch": true,
+      "autoSummarize": true
+    }
+  },
+  "warningEscalation": {
+    "enabled": false,
+    "levels": {}
+  },
+  "security": {
+    "antiNuke": true
+  },
+  "v12": {
+    "autopilot": {
+      "enabled": false
+    },
+    "snapshots": {
+      "disabled": false,
+      "items": []
+    }
+  },
+  "v13": {
+    "knowledge": {
+      "1539326065489743983": {
+        "facts": [],
+        "events": [],
+        "lastScan": "2026-09-17T10:38:11.711Z",
+        "behavior": {},
+        "anomalies": [],
+        "cached": {
+          "memberCount": 6,
+          "roles": [
+            {
+              "id": "1539326065489743983",
+              "name": "@everyone",
+              "position": 0,
+              "permissions": "2222085186637377"
+            },
+            {
+              "id": "1539326504041709658",
+              "name": "Owner",
+              "position": 5,
+              "permissions": "8864262742605823"
+            },
+            {
+              "id": "1539361470226370560",
+              "name": "The Best Chest",
+              "position": 3,
+              "permissions": "1720707884502593"
+            },
+            {
+              "id": "1539426163754147890",
+              "name": "Super Secret Guy",
+              "position": 2,
+              "permissions": "1721807559716807"
+            }
+          ],
+          "channels": [
+            {
+              "id": "1539326066286534697",
+              "name": "Generals",
+              "type": 4,
+              "parentId": null,
+              "position": 0
+            },
+            {
+              "id": "1539326066286534699",
+              "name": "general",
+              "type": 0,
+              "parentId": "1539326066286534697",
+              "position": 0
+            },
+            {
+              "id": "1539341508010975262",
+              "name": "ip",
+              "type": 0,
+              "parentId": "1539326066286534697",
+              "position": 1
+            },
+            {
+              "id": "1539366887245222000",
+              "name": "rules",
+              "type": 0,
+              "parentId": "1539326066286534697",
+              "position": 2
+            },
+            {
+              "id": "1539368445517242550",
+              "name": "rules",
+              "type": 0,
+              "parentId": null,
+              "position": 0
+            },
+            {
+              "id": "1539368445517242553",
+              "name": "moderator-only",
+              "type": 0,
+              "parentId": null,
+              "position": 0
+            },
+            {
+              "id": "1544827279165628528",
+              "name": "General 1",
+              "type": 2,
+              "parentId": "1539326066286534697",
+              "position": 0
+            },
+            {
+              "id": "1544827580505530498",
+              "name": "Secret Gen",
+              "type": 2,
+              "parentId": "1539326066286534697",
+              "position": 1
+            }
+          ],
+          "voice": [
+            {
+              "id": "1544827279165628528",
+              "name": "General 1",
+              "members": []
+            },
+            {
+              "id": "1544827580505530498",
+              "name": "Secret Gen",
+              "members": []
+            }
+          ]
+        }
+      }
+    },
+    "learning": {
+      "enabled": true,
+      "minObservations": 3
+    }
+  },
+  "v14": {
+    "reasoning": {},
+    "autopilot": {
+      "correlation": true
+    }
+  },
+  "v9": {
+    "actionJournal": [],
+    "memory": {
+      "server": {},
+      "users": {},
+      "preferences": {}
+    },
+    "nextActionId": 1,
+    "eventAwareness": {
+      "enabled": true,
+      "voiceMoves": false,
+      "logVoiceMoves": false,
+      "channels": false,
+      "roles": false,
+      "members": false,
+      "moderation": false
+    },
+    "confirmations": {
+      "enabled": true,
+      "destructiveActions": [
+        "ban",
+        "kick",
+        "timeout"
+      ]
+    },
+    "simulation": {
+      "enabled": true
+    },
+    "commandContextTtlMs": 60000
+  }
+}

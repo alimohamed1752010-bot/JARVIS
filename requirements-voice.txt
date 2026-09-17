@@ -1,0 +1,5 @@
+faster-whisper>=1.2.0,<2
+kokoro>=0.9.4,<1
+soundfile>=0.12.1,<1
+numpy>=1.26,<3
+misaki[en]>=0.7.0,<1
