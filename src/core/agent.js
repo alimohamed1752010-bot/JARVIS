@@ -15,6 +15,7 @@ const { validatePlan, summarize: summarizePlan } = require('./planValidator');
 const pc = require('./pcTools');
 const pcBridge = require('./pcBridge');
 const { WEB_ALIASES, KNOWN_APPS, APP_ALIASES } = require('./pcCatalog');
+const localVault = require('./localVault');
 
 const MAX_STEPS = 20;
 const MAX_AGENT_LOOPS = Math.min(Math.max(Number(process.env.JARVIS_AGENT_LOOPS || 2), 1), 4);
@@ -463,12 +464,49 @@ async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
   if(!isOwner) return {handled:false};
   const raw=String(prompt||'').replace(/^(?:(?:yo|hey|hi|ok|okay)\s+)?jarvis\b[,:!\s-]*/i,'').trim().replace(/^(?:yo\s+)?(?:get\s+everything\s+ready|everything\s+ready)[.!,:;\s-]*/i,'').trim();
   if(!raw) return {handled:false};
-  // AI-FIRST ARCHITECTURE: every JARVIS request reaches the AI planner before
-  // any regex/deterministic handler. Legacy parsers are emergency fallbacks only.
+  // V20 LOCAL-FIRST ARCHITECTURE: deterministic allowlisted actions run without Gemini.
+  // Gemini is reserved for ambiguous, conversational, or genuinely multi-domain planning.
   const deterministicPlan=deterministicAgentPlan(raw);
-  const session=getSession(config,message.guild.id,message.author.id)||[]; const recentContext=session.slice(-10).map(x=>`${x.role==='model'?'JARVIS':'USER'}: ${String(x.text||'').slice(0,500)}`).join('\n'); const live=await awareness.snapshot(message.guild).catch(()=>null); const liveContext=live?`LIVE SERVER CONTEXT (reference only; do not invent beyond this):\n${awareness.format(live)}`:''; const knowledge=serverKnowledge.context(config,message.guild.id); let pcContext=''; if(pcBridge.status().connected && /\b(?:pc|computer|system|screen|window|running|open|launch|start|run|play|browser|youtube|gmail|tiktok|spotify|steam|minecraft|rocket league|volume|network|internet)\b/i.test(raw)){ try { const state=await pcBridge.execute('pc_state',{action:'pc_state'},8000); pcContext=`LIVE PC CONTEXT (read-only; may be unavailable or slightly stale):\n${JSON.stringify(state?.details||state).slice(0,8000)}`; } catch(e){ pcContext='LIVE PC CONTEXT: unavailable'; } } const plannerPrompt=[liveContext,knowledge,recentContext?`RECENT CONVERSATION CONTEXT:\n${recentContext}`:'',`CURRENT REQUEST:\n${raw}`].filter(Boolean).join('\n\n');
+  if (deterministicPlan?.steps?.length) {
+    const validation=validatePlan(deterministicPlan,message.guild);
+    if (validation.ok && validation.plan?.steps?.length) {
+      const simulation=/^(?:preview|simulate|dry run|dry-run)\b/i.test(raw);
+      if (!simulation && (validation.plan.needsConfirmation || validation.plan.steps.some(s=>risk.level(s)>=3)) && !confirmed) {
+        const preview=summarizePlan(validation.plan,validation.details);
+        const token=Buffer.from(JSON.stringify({plan:validation.plan,createdAt:Date.now()})).toString('base64url');
+        config.v11??={}; config.v11.pendingPlans??={}; config.v11.pendingPlans[`${message.guild.id}:${message.author.id}`]={token,plan:validation.plan,expiresAt:Date.now()+60000}; saveConfig(message.guild.id,config);
+        return {handled:true,text:`**JARVIS V20 PLAN**\n${validation.plan.summary||'I have prepared the requested operations.'}\n\n${preview}\n\nReply **yes** to execute, or **no** to cancel.`};
+      }
+      if (simulation && !confirmed) return executePlan({message,plan:validation.plan,config,saveConfig,dryRun:true});
+      if (confirmed) {
+        const key=`${message.guild.id}:${message.author.id}`; const pending=config.v11?.pendingPlans?.[key];
+        if (!pending || pending.expiresAt<Date.now()) return {handled:true,text:'That plan has expired, sir. Please give the command again.'};
+        config.v11.pendingPlans[key]=null;
+      }
+      const pcOnly=validation.plan.steps.every(step=>String(step.action||'').startsWith('pc_'));
+      if(!pcOnly && !config.v12?.snapshots?.disabled) await snapshots.create(message.guild,config,saveConfig,{reason:validation.plan.summary||'Before JARVIS V20 plan'});
+      const result=await executePlan({message,plan:validation.plan,config,saveConfig});
+      saveConfig(message.guild.id,config);
+      return result;
+    }
+  }
+
+  // Only now do we spend an AI request. Keep the prompt small by retrieving
+  // relevant local-vault notes instead of dumping the whole memory store.
+  const session=getSession(config,message.guild.id,message.author.id)||[];
+  const recentContext=session.slice(-6).map(x=>`${x.role==='model'?'JARVIS':'USER'}: ${String(x.text||'').slice(0,400)}`).join('\n');
+  const live=await awareness.snapshot(message.guild).catch(()=>null);
+  const liveContext=live?`LIVE SERVER CONTEXT (reference only; do not invent beyond this):\n${awareness.format(live)}`:'';
+  const knowledge=serverKnowledge.context(config,message.guild.id);
+  const vaultContext=localVault.contextFor(raw,{maxResults:4,maxChars:9000});
+  let pcContext='';
+  if(pcBridge.status().connected && /\b(?:pc|computer|system|screen|window|running|open|launch|start|run|play|browser|youtube|gmail|tiktok|spotify|steam|minecraft|rocket league|volume|network|internet)\b/i.test(raw)){
+    try { const state=await pcBridge.execute('pc_state',{action:'pc_state'},8000); pcContext=`LIVE PC CONTEXT (read-only; may be unavailable or slightly stale):\n${JSON.stringify(state?.details||state).slice(0,5000)}`; }
+    catch(e){ pcContext='LIVE PC CONTEXT: unavailable'; }
+  }
+  const plannerPrompt=[liveContext,knowledge,vaultContext,pcContext,recentContext?`RECENT CONVERSATION CONTEXT:\n${recentContext}`:'',`CURRENT REQUEST:\n${raw}`].filter(Boolean).join('\n\n');
   let rawPlan=null;
-  try { rawPlan=await parseAgentPlan({message,prompt:plannerPrompt}); } catch(e) { console.warn('[AI-FIRST PLANNER]',e?.message||e); }
+  try { rawPlan=await parseAgentPlan({message,prompt:plannerPrompt}); } catch(e) { console.warn('[V20 AI ESCALATION]',e?.message||e); }
   // The AI planner is primary, but for PC intent we also reconcile its plan
   // against a deterministic intent pass. This prevents a valid natural-language
   // request such as "run Spotify and Rocket League" from being reduced to only

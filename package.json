@@ -1,7 +1,7 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "19.0.0",
-  "description": "JARVIS V19.0 - push-to-talk voice PC + Discord assistant",
+  "version": "20.0.0",
+  "description": "JARVIS V20.0 - local-first unified PC + Discord assistant",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

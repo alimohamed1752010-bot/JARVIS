@@ -37,7 +37,32 @@ function startRecording(){ if(busy||recorder) return; recordingPath=path.join(TM
 function stopRecording(){ if(!recorder) return Promise.resolve(null); const p=recorder; recorder=null; return new Promise(resolve=>{p.once('close',()=>resolve(recordingPath)); try{p.kill('SIGINT');}catch{try{p.kill();}catch{}}}); }
 async function transcribe(file){const data=fs.readFileSync(file).toString('base64'); const r=await ai.models.generateContent({model:STT_MODEL,contents:[{role:'user',parts:[{text:'Transcribe this microphone recording exactly. Return only the spoken words. Do not add commentary.'},{inlineData:{mimeType:'audio/wav',data}}]}]}); return String(r.text||'').trim();}
 function pcmToWav(pcm,sampleRate=24000,channels=1){const h=Buffer.alloc(44); const byteRate=sampleRate*channels*2; h.write('RIFF',0); h.writeUInt32LE(36+pcm.length,4); h.write('WAVE',8); h.write('fmt ',12); h.writeUInt32LE(16,16); h.writeUInt16LE(1,20); h.writeUInt16LE(channels,22); h.writeUInt32LE(sampleRate,24); h.writeUInt32LE(byteRate,28); h.writeUInt16LE(channels*2,32); h.writeUInt16LE(16,34); h.write('data',36); h.writeUInt32LE(pcm.length,40); return Buffer.concat([h,pcm]);}
-async function speak(text){if(!text)return; const prompt=`Speak naturally as a calm, concise British male AI assistant. Do not add words beyond the transcript.\nTRANSCRIPT:\n${String(text).slice(0,2500)}`; const r=await ai.models.generateContent({model:TTS_MODEL,contents:[{parts:[{text:prompt}]}],config:{responseModalities:['AUDIO'],speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName:TTS_VOICE}}}}}); const b=r.candidates?.[0]?.content?.parts?.find(p=>p.inlineData?.data)?.inlineData?.data; if(!b) return; const wav=path.join(TMP,`tts-${Date.now()}.wav`); fs.writeFileSync(wav,pcmToWav(Buffer.from(b,'base64'))); await new Promise(resolve=>{const ps=spawn('powershell.exe',['-NoProfile','-Command',`$p=New-Object System.Media.SoundPlayer '${wav.replace(/'/g,"''")}';$p.PlaySync()`],{windowsHide:true,stdio:'ignore'}); ps.on('close',()=>{try{fs.unlinkSync(wav)}catch{};resolve();});});}
+async function speakLocal(text){
+  const transcript=String(text||'').replace(/<@!?(\d+)>/g,'').replace(/\*\*/g,'').slice(0,2500);
+  if(!transcript)return;
+  const encoded=Buffer.from(transcript,'utf8').toString('base64');
+  const voiceArg=LOCAL_TTS_VOICE ? `$voice=$s.GetVoices() | Where-Object { $_.GetDescription() -eq '${LOCAL_TTS_VOICE.replace(/'/g,"''")}' } | Select-Object -First 1; if($voice){$s.SelectVoice($voice.VoiceInfo.Name)}` : '';
+  const script=`Add-Type -AssemblyName System.Speech; $s=New-Object System.Speech.Synthesis.SpeechSynthesizer; ${voiceArg} $s.Rate=0; $t=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')); $s.Speak($t); $s.Dispose()`;
+  await new Promise((resolve,reject)=>{const ps=spawn('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-Command',script],{windowsHide:true,stdio:['ignore','ignore','pipe']}); let err=''; ps.stderr.on('data',b=>err+=b.toString()); ps.on('error',reject); ps.on('close',code=>code===0?resolve():reject(new Error(err.trim()||`Local TTS exited with code ${code}`)));});
+}
+async function speakGemini(text){
+  const prompt=`Speak naturally as a calm, concise British male AI assistant. Do not add words beyond the transcript.\nTRANSCRIPT:\n${String(text).slice(0,2500)}`;
+  const r=await ai.models.generateContent({model:TTS_MODEL,contents:[{parts:[{text:prompt}]}],config:{responseModalities:['AUDIO'],speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName:TTS_VOICE}}}}});
+  const parts=(r.candidates||[]).flatMap(c=>c?.content?.parts||[]);
+  const b=parts.find(p=>p?.inlineData?.data)?.inlineData?.data;
+  if(!b) throw new Error('Gemini returned no TTS audio.');
+  const wav=path.join(TMP,`tts-${Date.now()}.wav`); fs.writeFileSync(wav,pcmToWav(Buffer.from(b,'base64')));
+  await new Promise(resolve=>{const ps=spawn('powershell.exe',['-NoProfile','-Command',`$p=New-Object System.Media.SoundPlayer '${wav.replace(/'/g,"''")}';$p.PlaySync()`],{windowsHide:true,stdio:'ignore'}); ps.on('close',()=>{try{fs.unlinkSync(wav)}catch{};resolve();});});
+}
+async function speak(text){
+  if(!text)return;
+  if(TTS_MODE!=='gemini'){
+    try { await speakLocal(text); return; }
+    catch(e){ console.warn('[VOICE TTS] Local TTS failed:',e.message); if(!TTS_GEMINI_FALLBACK)return; }
+  }
+  try { await speakGemini(text); }
+  catch(e){ console.warn('[VOICE TTS] Gemini TTS failed:',e.message); }
+}
 async function sendText(text){const r=await fetch(`${VOICE_URL}/voice`,{method:'POST',headers:{'Content-Type':'application/json','x-jarvis-voice-token':TOKEN},body:JSON.stringify({guildId:GUILD_ID,userId:USER_ID,text})}); const data=await r.json().catch(()=>({})); if(!r.ok||!data.ok) throw new Error(data.error||`Voice request failed (${r.status})`); return String(data.text||'');}
 async function handle(file){busy=true; try{const text=await transcribe(file); if(!text){await speak('I did not catch that.');return;} console.log(`[VOICE] You: ${text}`); const reply=await sendText(text); console.log(`[VOICE] JARVIS: ${reply}`); if(reply) await speak(reply.replace(/\*\*/g,'').replace(/<@!?\d+>/g,'').slice(0,2500));}catch(e){console.error('[VOICE]',e.message); try{await speak(`I couldn't process that: ${e.message}`)}catch{}} finally{busy=false;try{fs.unlinkSync(file)}catch{}}}
 (async()=>{micDevice=await findMic(); console.log(`[VOICE] Microphone: ${micDevice}`); console.log('[VOICE] Hold Right Ctrl to speak. Release to send.'); const key=psKeyWatcher(); let down=false; key.stdout.setEncoding('utf8'); key.stdout.on('data',async chunk=>{for(const line of chunk.split(/\r?\n/)){if(line==='DOWN'&&!down){down=true;startRecording();}else if(line==='UP'&&down){down=false;const file=await stopRecording();if(file&&fs.existsSync(file)&&fs.statSync(file).size>44) await handle(file);}}}); process.on('SIGINT',()=>{try{key.kill()}catch{};process.exit(0)});process.on('SIGTERM',()=>{try{key.kill()}catch{};process.exit(0)});})().catch(e=>{console.error('[VOICE STARTUP]',e.message);process.exit(1);});
