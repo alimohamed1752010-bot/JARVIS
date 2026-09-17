@@ -1,7 +1,7 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "20.5.0",
-  "description": "JARVIS V20.4 - local-first unified PC + Discord assistant with local voice",
+  "version": "20.8.0",
+  "description": "JARVIS V20.8 - reliable Discord action confirmations + local voice interruption safety",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
