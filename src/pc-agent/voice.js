@@ -9,7 +9,7 @@ const ffmpeg = require('ffmpeg-static');
 const pcTools = require('../core/pcTools');
 
 // ============================================================
-// JARVIS V20.8 LOCAL VOICE CLIENT
+// JARVIS V20.9 LOCAL VOICE CLIENT
 // - Keeps the working V19 Right-Ctrl + FFmpeg recorder.
 // - Local faster-whisper STT.
 // - Local Kokoro TTS.
@@ -450,6 +450,12 @@ function normalizeStt(text) {
   );
 
   // Common wake-word hallucination from short recordings.
+  // Whisper sometimes inserts punctuation after `time` or hears Spotify as
+  // `Spotify Premium`. Normalize only command-shaped phrases.
+  value = value.replace(/\btime[.!?,]?\s+(oraby|or\s+abi|a\s+be)\s+out\b/gi, 'timeout Oraby');
+  value = value.replace(/\b(?:open|launch|start|close|quit|exit)\s+spotify\s+premium\b/gi, match => match.replace(/spotify\s+premium/i, 'Spotify'));
+
+  // Common wake-word hallucination from short recordings.
   value = value.replace(/^(?:service|serious|jarvis\s*\.)\s+(?=(?:time|timed)\s+out\b)/i, 'Jarvis, ');
   return value.trim();
 }
@@ -683,7 +689,7 @@ async function handle(file) {
 (async () => {
   console.log('');
   console.log('========================================');
-  console.log('       JARVIS VOICE CLIENT V20.6');
+  console.log('       JARVIS VOICE CLIENT V20.9');
   console.log('========================================');
   console.log('');
 
