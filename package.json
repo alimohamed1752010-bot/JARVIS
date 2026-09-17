@@ -7,7 +7,8 @@
     "start": "node src/index.js",
     "deploy": "node src/deploy-commands.js",
     "test": "node --test test/*.test.js",
-    "voice": "node src/pc-agent/voice.js"
+    "voice": "node src/pc-agent/voice.js",
+    "pc": "node src/pc-agent/index.js"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",

@@ -453,10 +453,15 @@ async function spotifyControl(mode='toggle'){
   const status=String(spotify?.Status||'').toLowerCase();
   if(wanted==='play' && /playing/i.test(status)) return 'Spotify is already playing.';
   if(wanted==='pause' && /paused/i.test(status)) return 'Spotify is already paused.';
-  // Windows Media Play/Pause is app-agnostic, so only issue it when Spotify is
-  // the detected media session. This avoids randomly controlling another player.
+  // Control the detected Spotify media session directly. Do NOT use WScript.SendKeys
+  // for MEDIA_PLAY_PAUSE: it is not a real SendKeys token on Windows and can silently
+  // do nothing while JARVIS incorrectly reports success.
   if(!spotify) throw new Error('Spotify is open, but its active media session could not be detected.');
-  await hotkey('MEDIA_PLAY_PAUSE').catch(async()=>{ await key('{MEDIA_PLAY_PAUSE}'); });
+  const wantedMethod = wanted==='pause' ? 'TryPauseAsync' : 'TryPlayAsync';
+  const sourceHint = String(spotify.Source||'');
+  const encodedSource = Buffer.from(sourceHint,'utf8').toString('base64');
+  const ps=`$ErrorActionPreference='Stop'; $target=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedSource}')); $mgr=[Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager,Windows,ContentType=WindowsRuntime]::RequestAsync().GetAwaiter().GetResult(); $session=$mgr.GetSessions() | Where-Object { [string]$_.SourceAppUserModelId -match '(?i)spotify' } | Select-Object -First 1; if(-not $session){throw 'Spotify media session disappeared.'}; $ok=$session.${wantedMethod}().GetAwaiter().GetResult(); if(-not $ok){throw 'Windows rejected the Spotify media control request.'};`;
+  await runPS(ps,{timeout:10000});
   await new Promise(r=>setTimeout(r,700));
   const after=(await spotifySession()).find(x=>/spotify/i.test(String(x.Source||'')));
   const afterStatus=String(after?.Status||'').toLowerCase();
