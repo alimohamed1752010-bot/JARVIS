@@ -9,7 +9,7 @@ const ffmpeg = require('ffmpeg-static');
 const pcTools = require('../core/pcTools');
 
 // ============================================================
-// JARVIS V20.2 LOCAL VOICE CLIENT
+// JARVIS V20.8 LOCAL VOICE CLIENT
 // - Keeps the working V19 Right-Ctrl + FFmpeg recorder.
 // - Local faster-whisper STT.
 // - Local Kokoro TTS.
@@ -269,6 +269,9 @@ async function findMic() {
 let micDevice = null;
 let recorder = null;
 let recordingPath = null;
+let speechProcess = null;
+let speechGeneration = 0;
+let commandGeneration = 0;
 
 function startRecording() {
   if (recorder) {
@@ -414,6 +417,43 @@ function ensureSentence(text) {
   return /[.!?]$/.test(t) ? t : `${t}.`;
 }
 
+function normalizeStt(text) {
+  let value = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!value) return '';
+
+  // Small/en can turn the proper name "Oraby" into phrases such as
+  // "or I'll be" when it appears after "timeout". Correct only that
+  // very specific command-shaped ambiguity, rather than globally rewriting speech.
+  value = value.replace(
+    /\btime\s+out\s+(?:or\s+i(?:'|’)ll\s+be|or\s+ill\s+be|or\s+i\s+ll\s+be|or\s+a\s+be|or\s+abi)\b/gi,
+    'timeout Oraby'
+  );
+  value = value.replace(
+    /\btime\s+or\s+(?:i(?:'|’)ll\s+be|ill\s+be|i\s+ll\s+be)\b/gi,
+    'timeout Oraby'
+  );
+  value = value.replace(
+    /\btime(?:d)?\s+out\s+oraby\b/gi,
+    'timeout Oraby'
+  );
+  value = value.replace(
+    /\b(?:time|timed)\s+out\s+or\s+abi\b/gi,
+    'timeout Oraby'
+  );
+  value = value.replace(
+    /\b(?:time|timed)\s+or\s+(?:a\s+be|aby|abie|oraby)\b/gi,
+    'timeout Oraby'
+  );
+  value = value.replace(
+    /\b(?:timeout|time\s+out)\s+(?:or\s+i(?:'|’)ll\s+be|or\s+ill\s+be|or\s+abi|or\s+a\s+be)\b/gi,
+    'timeout Oraby'
+  );
+
+  // Common wake-word hallucination from short recordings.
+  value = value.replace(/^(?:service|serious|jarvis\s*\.)\s+(?=(?:time|timed)\s+out\b)/i, 'Jarvis, ');
+  return value.trim();
+}
+
 // ============================================================
 // SEND TO JARVIS
 // ============================================================
@@ -450,26 +490,60 @@ async function sendText(text) {
 // LOCAL AUDIO PLAYBACK + PC FALLBACK
 // ============================================================
 
-async function playWav(file) {
+async function stopSpeech(reason = 'interrupted') {
+  speechGeneration += 1;
+  const current = speechProcess;
+  speechProcess = null;
+  if (!current) return;
+  console.log(`[VOICE TTS] Stopping speech: ${reason}`);
+  try { current.kill(); } catch {}
+}
+
+async function playWav(file, generation) {
   if (!file || !fs.existsSync(file)) throw new Error(`TTS audio file not found: ${file}`);
   if (process.platform !== 'win32') throw new Error('JARVIS local voice playback currently requires Windows.');
   const escaped = String(file).replace(/'/g, "''");
   await new Promise((resolve, reject) => {
+    if (generation !== speechGeneration) return resolve();
     const ps = spawn('powershell.exe', [
       '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',
       `$p='${escaped}'; $player=New-Object System.Media.SoundPlayer($p); $player.Load(); $player.PlaySync()`
     ], { windowsHide: true, stdio: ['ignore','ignore','pipe'] });
+    speechProcess = ps;
     let err='';
     ps.stderr.on('data', d => { err += String(d); });
-    ps.once('error', reject);
-    ps.once('close', code => code===0 ? resolve() : reject(new Error(err.trim() || `Audio playback failed (${code}).`)));
+    ps.once('error', error => {
+      if (speechProcess === ps) speechProcess = null;
+      reject(error);
+    });
+    ps.once('close', code => {
+      if (speechProcess === ps) speechProcess = null;
+      if (generation !== speechGeneration) return resolve();
+      if (code===0) resolve();
+      else reject(new Error(err.trim() || `Audio playback failed (${code}).`));
+    });
   });
 }
 
-async function speakLocal(text) {
-  const wav = await localVoice.speak(String(text || '').trim());
+async function speakLocal(text, commandId = commandGeneration) {
+  const phrase = String(text || '').trim();
+  if (commandId !== commandGeneration) return;
+  if (!phrase) return;
+  await stopSpeech('new response');
+  const generation = speechGeneration;
+  const wav = await localVoice.speak(phrase);
+  if (commandId !== commandGeneration || generation !== speechGeneration) {
+    try { if (wav && fs.existsSync(wav)) fs.unlinkSync(wav); } catch {}
+    return;
+  }
   console.log(`[VOICE TTS] Playing: ${wav}`);
-  try { await playWav(wav); }
+  try {
+    if (commandId !== commandGeneration || generation !== speechGeneration) return;
+    await playWav(wav, generation);
+  }
+  catch (error) {
+    if (generation === speechGeneration) throw error;
+  }
   finally { try { if (wav && fs.existsSync(wav)) fs.unlinkSync(wav); } catch {} }
 }
 
@@ -534,21 +608,43 @@ async function localPcFallback(text) {
 // ============================================================
 
 async function handle(file) {
+  const commandId = commandGeneration;
+  const canContinue = () => commandId === commandGeneration;
   try {
     console.log('[VOICE] Processing command...');
 
-    const text = await localVoice.transcribe(file);
+    const rawText = await localVoice.transcribe(file);
+    if (!canContinue()) return;
+    const text = normalizeStt(rawText);
 
+    if (rawText !== text) console.log(`[VOICE] STT normalized: ${rawText} -> ${text}`);
     console.log(`[VOICE] STT result: ${text || '(empty)'}`);
 
     if (!text) {
-      await speakLocal('I did not catch that.');
+      await speakLocal('I did not catch that.', commandId);
       return;
     }
 
     console.log(`[VOICE] You: ${text}`);
 
-    const result = await sendText(text);
+    // Execute simple PC-native voice commands locally first. This keeps voice
+    // responsive even when the Railway agent is stale and prevents a desktop
+    // action such as "close Spotify" from being turned into an unnecessary
+    // server confirmation plan. Discord/moderation commands still go remotely.
+    const localFirst = /^(?:(?:yo|hey|hi|ok|okay)\s+)?jarvis\b[,:!\s-]*/i.test(text)
+      ? text.replace(/^(?:(?:yo|hey|hi|ok|okay)\s+)?jarvis\b[,:!\s-]*/i, '').trim()
+      : text.trim();
+    const isLocalPcCommand = /^(?:close|quit|exit|shut\s+down|open|launch|start|run)\s+(?:the\s+)?(?:spotify|twitch|youtube|tiktok|instagram|google|brave|discord|steam|notepad|calculator|explorer|code|chrome|edge|minecraft|modrinth|epic(?:\s+games)?(?:\s+launcher)?|\w+\s+app)\b/i.test(localFirst)
+      || /^(?:set\s+)?(?:the\s+)?volume\s+(?:to\s+)?\d{1,3}\s*%?$/i.test(localFirst)
+      || /^(?:pause|resume|play|toggle)(?:\s+(?:spotify|music))?$/i.test(localFirst);
+
+    let result;
+    if (isLocalPcCommand) {
+      const localReply = await localPcFallback(text);
+      if (localReply) result = { text: localReply, speechText: localReply };
+    }
+    if (!result) result = await sendText(text);
+
     let reply = result.text;
     if (!reply.trim()) {
       const localReply = await localPcFallback(text);
@@ -558,10 +654,13 @@ async function handle(file) {
     // Full internal result stays in the log. It is deliberately NOT sent to TTS.
     console.log(`[VOICE] JARVIS LOG:\n${reply}`);
 
-    const speech = result.speech || speechForExecution(reply);
+    const suppliedSpeech = String(result.speech || '').trim();
+    const speech = /JARVIS\s+V\d+(?:\.\d+)*\s+(?:EXECUTION|PLAN)/i.test(suppliedSpeech)
+      ? speechForExecution(suppliedSpeech)
+      : (suppliedSpeech || speechForExecution(reply));
     console.log(`[VOICE] JARVIS SPEECH: ${speech}`);
 
-    if (speech) await speakLocal(speech);
+    if (speech && canContinue()) await speakLocal(speech, commandId);
   } catch (error) {
     console.error('[VOICE ERROR]', error);
 
@@ -584,7 +683,7 @@ async function handle(file) {
 (async () => {
   console.log('');
   console.log('========================================');
-  console.log('       JARVIS VOICE CLIENT V20.4');
+  console.log('       JARVIS VOICE CLIENT V20.6');
   console.log('========================================');
   console.log('');
 
@@ -617,7 +716,11 @@ async function handle(file) {
 
       if (line === 'DOWN' && !down) {
         down = true;
+        commandGeneration += 1;
         console.log('[VOICE] Right Ctrl DOWN');
+        // Push-to-talk also acts as a hard speech interrupt. Only one audio
+        // stream is allowed at a time, so the assistant cannot talk over itself.
+        await stopSpeech('user interrupted');
         startRecording();
       } else if (line === 'UP' && down) {
         down = false;
@@ -649,6 +752,7 @@ async function handle(file) {
     console.log('\n[VOICE] Shutting down...');
     try { key.kill(); } catch {}
     try { if (recorder) recorder.kill(); } catch {}
+    try { stopSpeech('shutdown'); } catch {}
     localVoice.shutdown();
     process.exit(0);
   };

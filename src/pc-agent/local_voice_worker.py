@@ -63,17 +63,17 @@ def transcribe(audio_path):
     model = load_stt()
     segments, info = model.transcribe(
         str(audio_path),
-        beam_size=5,
-        best_of=5,
+        beam_size=10,
+        best_of=10,
         temperature=0,
         language='en',
         vad_filter=True,
-        vad_parameters={'min_silence_duration_ms': 350, 'speech_pad_ms': 180},
+        vad_parameters={'min_silence_duration_ms': 520, 'speech_pad_ms': 260, 'min_speech_duration_ms': 100},
         condition_on_previous_text=False,
         compression_ratio_threshold=2.4,
         log_prob_threshold=-1.0,
         no_speech_threshold=0.55,
-        initial_prompt='Jarvis. Open Spotify. Close Spotify. Open Twitch. Close Twitch. Play. Pause. Resume. Set volume. Turn the volume up. Turn the volume down. Open an app. Close an app.'
+        initial_prompt='Jarvis. JARVIS. Time out Oraby. Time out, Oraby. Timeout Oraby. Timeout, Oraby. Oraby. Time out Malik. Timeout Malik. Open Spotify. Close Spotify. Open Twitch. Close Twitch. Play. Pause. Resume. Set volume. Turn the volume up. Turn the volume down. Open an app. Close an app.'
     )
     text = ' '.join(seg.text.strip() for seg in segments).strip()
     return {'text': text, 'language': getattr(info, 'language', None)}

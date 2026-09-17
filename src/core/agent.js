@@ -39,7 +39,11 @@ function deterministicAgentPlan(prompt) {
   // explicit terminal "time <target> out [for <duration>]" phrase.
   let extractedTimeout=null;
   const timeoutMatch=raw.match(/(?:^|\s+(?:and|then)\s+|[,;]\s*)time\s+(.+?)\s+out(?:\s+for\s+(.+?))?$/i);
-  if(timeoutMatch){
+  // If the timeout is the ENTIRE request, leave it intact so the normal
+  // moderation parser below handles it. The old extractor consumed the
+  // whole string at index 0, turning `time Oraby out` into an empty request
+  // and allowing the conversational/clock fallback to answer instead.
+  if(timeoutMatch && timeoutMatch.index > 0){
     extractedTimeout={target:timeoutMatch[1].trim(),durationMs:timeoutMatch[2]?parseNaturalDuration(timeoutMatch[2]):10*60*1000};
     raw=raw.slice(0,timeoutMatch.index).replace(/(?:[,;]|\b(?:and|then))\s*$/i,'').trim();
   }
@@ -585,8 +589,8 @@ async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
 async function confirmPending({message,text,config,saveConfig}) {
   const key=`${message.guild.id}:${message.author.id}`; const pending=config.v11?.pendingPlans?.[key]; if(!pending) return null;
   if(Date.now()>pending.expiresAt){config.v11.pendingPlans[key]=null;saveConfig(message.guild.id,config);return {handled:true,text:'The pending plan expired, sir.'};}
-  if(/^no|cancel/i.test(text)){config.v11.pendingPlans[key]=null;saveConfig(message.guild.id,config);return {handled:true,text:'Cancelled. No changes were made.'};}
-  if(/^yes|confirm|do it/i.test(text)){config.v11.pendingPlans[key]=null;saveConfig(message.guild.id,config);if(!config.v12?.snapshots?.disabled) await snapshots.create(message.guild,config,saveConfig,{reason:pending.plan.summary||'Before confirmed JARVIS plan'});return executePlan({message,plan:pending.plan,config,saveConfig});}
+  if(/^(?:no|n|cancel|stop|abort)$/i.test(String(text||'').trim())){config.v11.pendingPlans[key]=null;saveConfig(message.guild.id,config);return {handled:true,text:'Cancelled. No changes were made.'};}
+  if(/^(?:yes|y|confirm|confirmed|do it|proceed|go ahead|execute)$/i.test(String(text||'').trim())){config.v11.pendingPlans[key]=null;saveConfig(message.guild.id,config);if(!config.v12?.snapshots?.disabled) await snapshots.create(message.guild,config,saveConfig,{reason:pending.plan.summary||'Before confirmed JARVIS plan'});return executePlan({message,plan:pending.plan,config,saveConfig});}
   return null;
 }
 module.exports={runAgent,confirmPending,cleanPlan,executePlan,deterministicAgentPlan};

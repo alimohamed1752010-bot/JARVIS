@@ -4820,11 +4820,46 @@ client.on(
     const universalPrompt = rawContent.replace(/\bjarvis\b/ig, '').trim();
     let aiFirstHandled = false;
     if (universalPrompt) {
+      // Confirmation replies are NOT new AI questions. They must be consumed
+      // before the planner/conversation pipeline, otherwise `yes` gets treated
+      // as a fresh conversational message and the pending Discord action is
+      // lost. V11 confirmations therefore have absolute priority here.
+      try {
+        const confirmed = await confirmV11Plan({message, text:universalPrompt, config, saveConfig});
+        if (confirmed?.handled) {
+          await message.reply(confirmed.text || 'Done, sir.');
+          rememberDirectReplyTurn(message, universalPrompt, confirmed.text || 'Done, sir.');
+          return;
+        }
+      } catch (error) {
+        console.error('[V20 CONFIRMATION ROUTER]', error);
+      }
+
+      // Preserve the older V9 confirmation store as a second safety net for
+      // legacy commands that still create commandEngine confirmations.
+      if (/^(?:yes|y|confirm|confirmed|do it|proceed|go ahead|execute|no|n|cancel|stop|abort)$/i.test(universalPrompt)) {
+        try {
+          const legacy = await routeV9Command({message, text:universalPrompt, config, saveConfig});
+          if (legacy?.handled) {
+            await message.reply(legacy.text || 'Done, sir.');
+            rememberDirectReplyTurn(message, universalPrompt, legacy.text || 'Done, sir.');
+            return;
+          }
+        } catch (error) {
+          console.error('[V20 LEGACY CONFIRMATION ROUTER]', error);
+        }
+      }
+
       try {
         const agent = await runAgent({message, prompt:universalPrompt, config, saveConfig});
         if (agent?.handled) {
           aiFirstHandled = true;
-          await message.reply(agent.text || 'Done, sir.');
+          const agentReply = agent.text || 'Done, sir.';
+          await message.reply(agentReply);
+          // Action results are conversation turns too. Keep them in the same
+          // memory/session path so follow-ups such as "do that again",
+          // "what did you just change?", and target corrections retain context.
+          rememberDirectReplyTurn(message, universalPrompt, agentReply);
           return;
         }
       } catch (error) {
