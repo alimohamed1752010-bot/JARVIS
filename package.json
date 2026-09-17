@@ -1,7 +1,7 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "18.6.0",
-  "description": "JARVIS V18.6 unified PC + Discord assistant with verified Spotify playback and transport controls.",
+  "version": "18.7.0",
+  "description": "JARVIS V18.7 - Safe Spotify playback and transport controls",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

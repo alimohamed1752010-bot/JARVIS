@@ -361,39 +361,86 @@ function spotifyMatchTitle(title,query){
   return a===b || a.includes(b) || b.includes(a);
 }
 
+async function spotifyUiPlay(query){
+  ensureWindows();
+  const encoded=Buffer.from(String(query||''),'utf8').toString('base64');
+  const ps=`
+Add-Type -AssemblyName UIAutomationClient;
+Add-Type -AssemblyName UIAutomationTypes;
+$q=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'));
+$proc=Get-Process -Name 'Spotify' -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowHandle -ne 0} | Select-Object -First 1;
+if(-not $proc){ throw 'Spotify window was not found.' }
+$root=[System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle);
+if(-not $root){ throw 'Spotify UI could not be inspected safely.' }
+$walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;
+$queue=New-Object System.Collections.Generic.Queue[System.Windows.Automation.AutomationElement];
+$queue.Enqueue($root);
+$needle=$q.ToLowerInvariant();
+$found=$false;
+while($queue.Count -gt 0 -and -not $found){
+  $el=$queue.Dequeue();
+  try {
+    $name=[string]$el.Current.Name;
+    if($name -and $name.ToLowerInvariant().Contains($needle)){
+      $ancestor=$el;
+      for($level=0;$level -lt 6 -and $ancestor -and -not $found;$level++){
+        $child=$walker.GetFirstChild($ancestor);
+        while($child -and -not $found){
+          try {
+            $ct=$child.Current.ControlType;
+            $cn=[string]$child.Current.Name;
+            if($ct -eq [System.Windows.Automation.ControlType]::Button -and $cn -match '(?i)play' -and $child.Current.IsEnabled -and -not $child.Current.IsOffscreen){
+              $pat=$child.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern);
+              $pat.Invoke();
+              $found=$true;
+            }
+          } catch {}
+          $child=$walker.GetNextSibling($child);
+        }
+        if(-not $found){$ancestor=$walker.GetParent($ancestor)}
+      }
+    }
+  } catch {}
+  try {
+    $child=$walker.GetFirstChild($el);
+    while($child){$queue.Enqueue($child);$child=$walker.GetNextSibling($child)}
+  } catch {}
+}
+if(-not $found){ throw 'No safe Play button associated with the requested Spotify result was found. No additional keyboard or mouse input was sent.' }
+`;
+  await runPS(ps,{timeout:12000});
+}
+
 async function spotifyPlay(query) {
   const q=String(query||'').trim(); if(!q) throw new Error('Spotify search is empty.');
   await openApp('spotify');
   await new Promise(r=>setTimeout(r,1800));
+  // Spotify documents Ctrl+K as the desktop search shortcut. Keep the input
+  // sequence deliberately short and deterministic. Never use repeated Tab/Enter
+  // loops because focus can move to unrelated account/settings controls.
   await hotkey('CTRL+K');
   await new Promise(r=>setTimeout(r,300));
   await typeText(q);
   await new Promise(r=>setTimeout(r,900));
   await key('{ENTER}');
-  await new Promise(r=>setTimeout(r,1400));
+  await new Promise(r=>setTimeout(r,1600));
 
-  // Spotify's desktop UI changes occasionally, because apparently buttons need
-  // seasonal fashion updates. Try a small number of keyboard paths and verify
-  // through Windows' media session before claiming that anything actually played.
-  for(let attempt=0; attempt<6; attempt++){
-    const sessions=await spotifySession();
-    const spotify=sessions.find(x=>/spotify/i.test(String(x.Source||'')));
-    if(spotify && spotifyMatchTitle(spotify.Title,q) && /playing/i.test(String(spotify.Status||''))) {
-      return `Playing “${spotify.Title}” on Spotify${spotify.Artist?` by ${spotify.Artist}`:''}.`;
-    }
-    if(spotify && spotifyMatchTitle(spotify.Title,q) && /paused/i.test(String(spotify.Status||''))) {
-      await hotkey('SPACE');
-      await new Promise(r=>setTimeout(r,800));
-      const after=await spotifySession();
-      const s=after.find(x=>/spotify/i.test(String(x.Source||'')));
-      if(s && spotifyMatchTitle(s.Title,q) && /playing/i.test(String(s.Status||''))) return `Playing “${s.Title}” on Spotify${s.Artist?` by ${s.Artist}`:''}.`;
-    }
-    await hotkey('TAB');
-    await new Promise(r=>setTimeout(r,180));
-    await hotkey('ENTER');
-    await new Promise(r=>setTimeout(r,900));
+  let sessions=await spotifySession();
+  let spotify=sessions.find(x=>/spotify/i.test(String(x.Source||'')));
+  if(spotify && spotifyMatchTitle(spotify.Title,q) && /playing/i.test(String(spotify.Status||''))) {
+    return `Playing “${spotify.Title}” on Spotify${spotify.Artist?` by ${spotify.Artist}`:''}.`;
   }
-  throw new Error(`Spotify opened and searched for “${q}”, but playback could not be verified.`);
+
+  // Safe UI Automation: locate the requested result by accessible name and invoke
+  // only a Play button belonging to that result. No blind Tab/Enter/mouse clicking.
+  await spotifyUiPlay(q);
+  await new Promise(r=>setTimeout(r,1000));
+  sessions=await spotifySession();
+  spotify=sessions.find(x=>/spotify/i.test(String(x.Source||'')));
+  if(spotify && spotifyMatchTitle(spotify.Title,q) && /playing/i.test(String(spotify.Status||''))) {
+    return `Playing “${spotify.Title}” on Spotify${spotify.Artist?` by ${spotify.Artist}`:''}.`;
+  }
+  throw new Error(`Spotify found “${q}”, but playback could not be safely verified. No further input was sent.`);
 }
 
 async function spotifyControl(mode='toggle'){

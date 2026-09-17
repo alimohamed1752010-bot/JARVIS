@@ -111,9 +111,9 @@ function deterministicAgentPlan(prompt) {
       }
       // Spotify transport controls. These are deterministic because 'pause music'
       // is not a philosophical question and does not need an AI committee meeting.
-      if(/\b(?:pause|stop)\s+(?:the\s+)?(?:music|song|track|spotify)\b/i.test(raw) && !/\b(?:pause|stop)\s+(?:the\s+)?(?:download|recording)\b/i.test(raw)) steps.push(base('pc_spotify_control',{name:'pause'}));
-      else if(/\b(?:resume|continue)\s+(?:the\s+)?(?:music|song|track|spotify)\b/i.test(raw)) steps.push(base('pc_spotify_control',{name:'play'}));
-      else if(/\b(?:play|start)\s+(?:the\s+)?(?:music|song|track|spotify)\b/i.test(raw) && !/\b(?:play|start)\s+.+\s+(?:on|in)\s+spotify\b/i.test(raw)) steps.push(base('pc_spotify_control',{name:'play'}));
+      if(/^\s*(?:pause|stop)(?:\s+(?:the\s+)?(?:music|song|track|spotify))?\s*$/i.test(raw) && !/\b(?:pause|stop)\s+(?:the\s+)?(?:download|recording)\b/i.test(raw)) steps.push(base('pc_spotify_control',{name:'pause'}));
+      else if(/^\s*(?:resume|continue)(?:\s+(?:the\s+)?(?:music|song|track|spotify))?\s*$/i.test(raw)) steps.push(base('pc_spotify_control',{name:'play'}));
+      else if(/^\s*(?:play|start)(?:\s+(?:the\s+)?(?:music|song|track|spotify))?\s*$/i.test(raw) && !/\b(?:play|start)\s+.+\s+(?:on|in)\s+spotify\b/i.test(raw)) steps.push(base('pc_spotify_control',{name:'play'}));
       const play=raw.match(/\b(?:play|put on)\s+(.+?)(?=\s*(?:,|;)\s*(?:(?:and|then)\s+)?(?:set|make|run|open|launch|start|put\s+on)\b|\s+(?:and|then)\s+(?:set|make|run|open|launch|start)\b|$)/i);
       // "put on Spotify" means launch Spotify, not search Spotify for a track
       // literally named "Spotify". Humanity has suffered enough from that bug.
