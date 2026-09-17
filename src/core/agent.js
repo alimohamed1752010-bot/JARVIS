@@ -61,6 +61,14 @@ function deterministicAgentPlan(prompt) {
   // Natural moderation phrasing: "time @user out for 1 minute" maps to Discord timeout.
   let tm=raw.match(/^(?:time|put)\s+(.+?)\s+out(?:\s+for\s+(.+))?$/i);
   if(tm) return {summary:`Timeout ${tm[1].trim()}${tm[2]?` for ${tm[2].trim()}`:''}.`,needsConfirmation:true,steps:[base('timeout',{targets:[tm[1].trim()],durationMs:tm[2]?parseNaturalDuration(tm[2]):10*60*1000})]};
+  // V20.4: deterministic app-close routing. Closing an app is a local PC action,
+  // so do not make the AI planner guess whether "close Spotify" is a Discord request.
+  const closeMatch=raw.match(/^\s*(?:close|quit|exit|shut\s+down)\s+(?:the\s+)?(.+?)\s*$/i);
+  if(closeMatch){
+    const target=closeMatch[1].trim().replace(/\b(app|application|program|window)\b$/i,'').trim();
+    if(target) return {summary:`Close ${target}.`,needsConfirmation:false,steps:[base('pc_close_app',{name:target})]};
+  }
+
   // Desktop command fallback: natural-language PC requests should never fall through
   // to a conversational reply just because the AI planner is unavailable or chooses
   // not to emit a tool plan. This is intentionally deterministic and only creates
@@ -215,7 +223,7 @@ function cleanPlan(plan) {
     permissionChanges: Array.isArray(s?.permissionChanges) ? s.permissionChanges.map(x => ({permission:String(x?.permission||'').trim(),enabled:Boolean(x?.enabled)})).filter(x=>x.permission).slice(0,30) : [],
     caseId: String(s?.caseId || '').trim(),
     createParentIfMissing:Boolean(s?.createParentIfMissing),
-    reason: String(s?.reason || '').trim().slice(0,500), durationMs: String(s?.action||'').toLowerCase()==='pc_volume' ? Math.min(Math.max(Number(s?.durationMs ?? 50),0),100) : Math.min(Math.max(Number(s?.durationMs)||600000,1000),28*24*60*60*1000),
+    reason: String(s?.reason || '').trim().slice(0,500), durationMs: String(s?.action||'').toLowerCase()==='pc_volume' ? Number(s?.durationMs ?? 50) : Math.min(Math.max(Number(s?.durationMs)||600000,1000),28*24*60*60*1000),
   })).filter(s => s.action);
   return { summary:String(plan.summary||'').trim().slice(0,500), needsConfirmation:Boolean(plan.needsConfirmation)||steps.some(s=>HIGH_RISK.has(s.action)), steps };
 }
@@ -513,7 +521,7 @@ async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
   // one action when the model under-plans it. Deterministic actions are only
   // dedicated, allowlisted PC actions and are merged without duplicates.
   if(deterministicPlan?.steps?.length) {
-    const pcActions=new Set(['pc_open_app','pc_open_url','pc_browser_search','pc_spotify_play','pc_spotify_control','pc_volume','pc_processes','pc_system_status','pc_active_window','pc_network_status','pc_state']);
+    const pcActions=new Set(['pc_open_app','pc_open_url','pc_browser_search','pc_spotify_play','pc_spotify_control','pc_close_app','pc_volume','pc_processes','pc_system_status','pc_active_window','pc_network_status','pc_state']);
     if(!rawPlan) rawPlan=deterministicPlan;
     else if(rawPlan.steps?.length) {
       const key=(x)=>`${String(x.action).toLowerCase()}|${String(x.name||'').trim().toLowerCase()}`;

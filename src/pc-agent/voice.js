@@ -1,53 +1,661 @@
 require('dotenv').config();
-const fs=require('node:fs');
-const os=require('node:os');
-const path=require('node:path');
-const {spawn}=require('node:child_process');
-const WebSocket=require('ws');
-const {GoogleGenAI}=require('@google/genai');
-const ffmpeg=require('ffmpeg-static');
 
-const TOKEN=String(process.env.JARVIS_PC_TOKEN||'').trim();
-const GUILD_ID=String(process.env.JARVIS_VOICE_GUILD_ID||'').trim();
-const USER_ID=String(process.env.JARVIS_VOICE_USER_ID||'').trim();
-const RAW_URL=String(process.env.JARVIS_PC_URL||'').trim();
-const VOICE_URL=String(process.env.JARVIS_VOICE_URL||RAW_URL.replace(/^wss:/i,'https:').replace(/^ws:/i,'http:')).replace(/\/$/,'');
-const GEMINI_KEY=String(process.env.GEMINI_API_KEY||'').trim();
-const STT_MODEL=String(process.env.GEMINI_STT_MODEL||'gemini-2.5-flash').trim();
-const TTS_MODEL=String(process.env.GEMINI_TTS_MODEL||'gemini-2.5-flash-preview-tts').trim();
-const TTS_VOICE=String(process.env.JARVIS_TTS_VOICE||'Algenib').trim();
-const TMP=path.join(os.tmpdir(),'jarvis-voice'); fs.mkdirSync(TMP,{recursive:true});
-if(!TOKEN||!GUILD_ID||!USER_ID||!VOICE_URL||!GEMINI_KEY) { console.error('Voice setup requires JARVIS_PC_TOKEN, JARVIS_VOICE_GUILD_ID, JARVIS_VOICE_USER_ID, JARVIS_PC_URL and GEMINI_API_KEY.'); process.exit(1); }
-const ai=new GoogleGenAI({apiKey:GEMINI_KEY});
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const readline = require('node:readline');
+const { spawn } = require('node:child_process');
+const ffmpeg = require('ffmpeg-static');
+const pcTools = require('../core/pcTools');
 
-function psKeyWatcher(){
-  const script=`Add-Type @'\nusing System; using System.Runtime.InteropServices; public static class K { [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int v); }\n'@; $was=$false; while($true){$down=([K]::GetAsyncKeyState(0xA3)-band 0x8000)-ne 0; if($down -and -not $was){'DOWN';[Console]::Out.Flush()}; if(-not $down -and $was){'UP';[Console]::Out.Flush()}; $was=$down; Start-Sleep -Milliseconds 35}`;
-  const ps=spawn('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-Command',script],{windowsHide:true,stdio:['ignore','pipe','pipe']});
-  ps.stderr.on('data',b=>console.warn('[VOICE KEY]',b.toString().trim())); return ps;
+// ============================================================
+// JARVIS V20.2 LOCAL VOICE CLIENT
+// - Keeps the working V19 Right-Ctrl + FFmpeg recorder.
+// - Local faster-whisper STT.
+// - Local Kokoro TTS.
+// - Gemini is NOT used for routine voice transcription/speech.
+// - Full JARVIS execution output stays in the console/log.
+// - Voice receives a short, human confirmation instead.
+// ============================================================
+
+const TOKEN = String(process.env.JARVIS_PC_TOKEN || '').trim();
+const GUILD_ID = String(process.env.JARVIS_VOICE_GUILD_ID || '').trim();
+const USER_ID = String(process.env.JARVIS_VOICE_USER_ID || '').trim();
+const RAW_URL = String(process.env.JARVIS_PC_URL || '').trim();
+const VOICE_URL = String(
+  process.env.JARVIS_VOICE_URL ||
+    RAW_URL
+      .replace(/^wss:/i, 'https:')
+      .replace(/^ws:/i, 'http:')
+).replace(/\/+$/, '');
+
+const TMP = path.join(os.tmpdir(), 'jarvis-voice');
+fs.mkdirSync(TMP, { recursive: true });
+
+if (!TOKEN || !GUILD_ID || !USER_ID || !VOICE_URL) {
+  console.error('[VOICE STARTUP] Missing required environment variables.');
+  console.error('Required: JARVIS_PC_TOKEN, JARVIS_VOICE_GUILD_ID, JARVIS_VOICE_USER_ID, JARVIS_PC_URL');
+  process.exit(1);
 }
-async function findMic(){
-  if(process.env.JARVIS_MIC_DEVICE) return String(process.env.JARVIS_MIC_DEVICE);
-  return new Promise((resolve,reject)=>{
-    const p=spawn(ffmpeg,['-hide_banner','-list_devices','true','-f','dshow','-i','dummy'],{windowsHide:true}); let out='';
-    p.stderr.on('data',b=>out+=b.toString()); p.on('close',()=>{const m=[...out.matchAll(/\"([^\"]+)\"\s+\(audio\)/g)].map(x=>x[1]); if(m[0]) resolve(m[0]); else reject(new Error('No Windows microphone was detected by FFmpeg. Set JARVIS_MIC_DEVICE to your microphone device name.'));});
+
+// ============================================================
+// LOCAL VOICE WORKER
+// ============================================================
+
+function localPythonPath() {
+  const configured = String(process.env.JARVIS_VOICE_PYTHON || '').trim();
+  if (configured) return configured;
+
+  const local = path.join(__dirname, '..', '..', '.voice-venv', 'Scripts', 'python.exe');
+  if (fs.existsSync(local)) return local;
+
+  return process.platform === 'win32' ? 'python' : 'python3';
+}
+
+class LocalVoiceWorker {
+  constructor() {
+    this.proc = null;
+    this.buffer = '';
+    this.pending = [];
+    this.started = false;
+  }
+
+  start() {
+    if (this.proc) return;
+
+    const python = localPythonPath();
+    const script = path.join(__dirname, 'local_voice_worker.py');
+
+    if (!fs.existsSync(script)) {
+      throw new Error(`Local voice worker is missing: ${script}`);
+    }
+
+    console.log(`[LOCAL VOICE] Starting worker: ${python}`);
+
+    this.proc = spawn(python, ['-u', script], {
+      cwd: path.join(__dirname, '..', '..'),
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: process.env
+    });
+
+    this.proc.stdout.setEncoding('utf8');
+    this.proc.stderr.setEncoding('utf8');
+
+    this.proc.stdout.on('data', chunk => {
+      this.buffer += chunk;
+      let index;
+      while ((index = this.buffer.indexOf('\n')) !== -1) {
+        const line = this.buffer.slice(0, index).trim();
+        this.buffer = this.buffer.slice(index + 1);
+        if (!line) continue;
+
+        let message;
+        try {
+          message = JSON.parse(line);
+        } catch {
+          console.warn('[LOCAL VOICE] Invalid worker response:', line);
+          continue;
+        }
+
+        const pending = this.pending.shift();
+        if (pending) {
+          if (message.ok) pending.resolve(message);
+          else pending.reject(new Error(message.error || 'Local voice worker failed.'));
+        }
+      }
+    });
+
+    this.proc.stderr.on('data', chunk => {
+      const text = String(chunk).trim();
+      if (text) console.log(text);
+    });
+
+    this.proc.on('error', error => {
+      console.error('[LOCAL VOICE WORKER ERROR]', error.message);
+      while (this.pending.length) this.pending.shift().reject(error);
+    });
+
+    this.proc.on('close', code => {
+      console.log(`[LOCAL VOICE] Worker exited with code ${code}`);
+      const error = new Error(`Local voice worker exited with code ${code}.`);
+      while (this.pending.length) this.pending.shift().reject(error);
+      this.proc = null;
+    });
+
+    this.started = true;
+  }
+
+  request(payload) {
+    this.start();
+
+    return new Promise((resolve, reject) => {
+      this.pending.push({ resolve, reject });
+      try {
+        this.proc.stdin.write(`${JSON.stringify(payload)}\n`);
+      } catch (error) {
+        this.pending = this.pending.filter(x => x.resolve !== resolve);
+        reject(error);
+      }
+    });
+  }
+
+  async warmup() {
+    console.log('[LOCAL VOICE] Warming up STT + TTS models...');
+    await this.request({ op: 'warmup' });
+    console.log('[LOCAL VOICE] STT + TTS ready.');
+  }
+
+  async transcribe(file) {
+    const result = await this.request({ op: 'transcribe', file });
+    return String(result.text || '').trim();
+  }
+
+  async speak(text) {
+    const result = await this.request({ op: 'speak', text: String(text || '').trim() });
+    return result.path;
+  }
+
+  shutdown() {
+    if (!this.proc) return;
+    try { this.proc.stdin.write(JSON.stringify({ op: 'shutdown' }) + '\n'); } catch {}
+    setTimeout(() => {
+      try { this.proc.kill(); } catch {}
+    }, 500);
+  }
+}
+
+const localVoice = new LocalVoiceWorker();
+
+// ============================================================
+// WINDOWS KEY WATCHER
+// ============================================================
+
+function psKeyWatcher() {
+  const script = `
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class Keyboard {
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int vKey);
+}
+'@
+
+$wasDown = $false
+
+while ($true) {
+    $state = [Keyboard]::GetAsyncKeyState(0xA3)
+    $isDown = (($state -band 0x8000) -ne 0)
+
+    if ($isDown -and -not $wasDown) {
+        [Console]::WriteLine("DOWN")
+        [Console]::Out.Flush()
+    }
+
+    if (-not $isDown -and $wasDown) {
+        [Console]::WriteLine("UP")
+        [Console]::Out.Flush()
+    }
+
+    $wasDown = $isDown
+    Start-Sleep -Milliseconds 20
+}
+`;
+
+  console.log('[VOICE] Starting keyboard watcher...');
+
+  const ps = spawn(
+    'powershell.exe',
+    [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      script
+    ],
+    { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
+  );
+
+  ps.stdout.setEncoding('utf8');
+  ps.stderr.setEncoding('utf8');
+
+  ps.stderr.on('data', data => {
+    const message = data.toString().trim();
+    if (message) console.warn('[VOICE KEY]', message);
+  });
+
+  ps.on('error', error => console.error('[VOICE KEY ERROR]', error.message));
+
+  ps.on('close', code => console.log(`[VOICE KEY] watcher exited with code ${code}`));
+
+  return ps;
+}
+
+// ============================================================
+// MICROPHONE DISCOVERY
+// ============================================================
+
+async function findMic() {
+  if (process.env.JARVIS_MIC_DEVICE) return String(process.env.JARVIS_MIC_DEVICE);
+
+  return new Promise((resolve, reject) => {
+    console.log('[VOICE] Detecting microphone...');
+
+    const p = spawn(
+      ffmpeg,
+      ['-hide_banner', '-list_devices', 'true', '-f', 'dshow', '-i', 'dummy'],
+      { windowsHide: true }
+    );
+
+    let output = '';
+    p.stderr.on('data', data => { output += data.toString(); });
+
+    p.on('close', () => {
+      const matches = [...output.matchAll(/"([^"]+)"\s+\(audio\)/gi)].map(match => match[1]);
+      if (matches[0]) resolve(matches[0]);
+      else reject(new Error('No Windows microphone was detected by FFmpeg. Set JARVIS_MIC_DEVICE to your microphone device name.'));
+    });
   });
 }
-let micDevice=null; let recorder=null; let recordingPath=null; let busy=false;
-function startRecording(){ if(busy||recorder) return; recordingPath=path.join(TMP,`jarvis-${Date.now()}.wav`); recorder=spawn(ffmpeg,['-hide_banner','-loglevel','error','-f','dshow','-i',`audio=${micDevice}`,'-ac','1','-ar','16000','-y',recordingPath],{windowsHide:true,stdio:['ignore','ignore','pipe']}); recorder.stderr.on('data',b=>console.warn('[VOICE REC]',b.toString().trim())); recorder.on('error',e=>console.error('[VOICE REC ERROR]',e.message)); console.log('[VOICE] Listening... release Right Ctrl when done.'); }
-function stopRecording(){ if(!recorder) return Promise.resolve(null); const p=recorder; recorder=null; return new Promise(resolve=>{p.once('close',()=>resolve(recordingPath)); try{p.kill('SIGINT');}catch{try{p.kill();}catch{}}}); }
-async function transcribe(file){const data=fs.readFileSync(file).toString('base64'); const r=await ai.models.generateContent({model:STT_MODEL,contents:[{role:'user',parts:[{text:'Transcribe this microphone recording exactly. Return only the spoken words. Do not add commentary.'},{inlineData:{mimeType:'audio/wav',data}}]}]}); return String(r.text||'').trim();}
-function pcmToWav(pcm,sampleRate=24000,channels=1){const h=Buffer.alloc(44); const byteRate=sampleRate*channels*2; h.write('RIFF',0); h.writeUInt32LE(36+pcm.length,4); h.write('WAVE',8); h.write('fmt ',12); h.writeUInt32LE(16,16); h.writeUInt16LE(1,20); h.writeUInt16LE(channels,22); h.writeUInt32LE(sampleRate,24); h.writeUInt32LE(byteRate,28); h.writeUInt16LE(channels*2,32); h.writeUInt16LE(16,34); h.write('data',36); h.writeUInt32LE(pcm.length,40); return Buffer.concat([h,pcm]);}
-async function speak(text){
-  if(!text)return;
-  const prompt=`Speak naturally as a calm, concise British male AI assistant. Do not add words beyond the transcript.\nTRANSCRIPT:\n${String(text).slice(0,2500)}`;
-  const r=await ai.models.generateContent({model:TTS_MODEL,contents:[{parts:[{text:prompt}]}],config:{responseModalities:['AUDIO'],speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName:TTS_VOICE}}}}});
-  const b=r.candidates?.[0]?.content?.parts?.find(p=>p.inlineData?.data)?.inlineData?.data;
-  if(!b){console.warn('[VOICE TTS] Gemini returned no TTS audio.');return;}
-  const wav=path.join(TMP,`tts-${Date.now()}.wav`);
-  fs.writeFileSync(wav,pcmToWav(Buffer.from(b,'base64')));
-  const safeWav=wav.replace(/'/g,"''");
-  const cmd=`$p=New-Object System.Media.SoundPlayer '${safeWav}';$p.PlaySync()`;
-  await new Promise(resolve=>{const ps=spawn('powershell.exe',['-NoProfile','-Command',cmd],{windowsHide:true,stdio:'ignore'});ps.on('close',()=>{try{fs.unlinkSync(wav)}catch{};resolve();});});
+
+// ============================================================
+// RECORDING STATE
+// ============================================================
+
+let micDevice = null;
+let recorder = null;
+let recordingPath = null;
+
+function startRecording() {
+  if (recorder) {
+    console.log('[VOICE] Recorder already running.');
+    return;
+  }
+
+  recordingPath = path.join(TMP, `jarvis-${Date.now()}.wav`);
+
+  console.log(`[VOICE] Starting recording: ${recordingPath}`);
+
+  recorder = spawn(
+    ffmpeg,
+    [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-f',
+      'dshow',
+      '-i',
+      `audio=${micDevice}`,
+      '-ac',
+      '1',
+      '-ar',
+      '16000',
+      '-y',
+      recordingPath
+    ],
+    { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] }
+  );
+
+  recorder.stderr.on('data', data => {
+    const message = data.toString().trim();
+    if (message) console.warn('[VOICE REC]', message);
+  });
+
+  recorder.on('error', error => console.error('[VOICE REC ERROR]', error.message));
+
+  recorder.on('close', (code, signal) => {
+    console.log(`[VOICE REC] ffmpeg exited. code=${code} signal=${signal || 'none'}`);
+  });
+
+  console.log('[VOICE] Recording... release Right Ctrl when done.');
 }
-async function handle(file){busy=true; try{const text=await transcribe(file); if(!text){await speak('I did not catch that.');return;} console.log(`[VOICE] You: ${text}`); const reply=await sendText(text); console.log(`[VOICE] JARVIS: ${reply}`); if(reply) await speak(reply.replace(/\*\*/g,'').replace(/<@!?\d+>/g,'').slice(0,2500));}catch(e){console.error('[VOICE]',e.message); try{await speak(`I couldn't process that: ${e.message}`)}catch{}} finally{busy=false;try{fs.unlinkSync(file)}catch{}}}
-(async()=>{micDevice=await findMic(); console.log(`[VOICE] Microphone: ${micDevice}`); console.log('[VOICE] Hold Right Ctrl to speak. Release to send.'); const key=psKeyWatcher(); let down=false; key.stdout.setEncoding('utf8'); key.stdout.on('data',async chunk=>{for(const line of chunk.split(/\r?\n/)){if(line==='DOWN'&&!down){down=true;startRecording();}else if(line==='UP'&&down){down=false;const file=await stopRecording();if(file&&fs.existsSync(file)&&fs.statSync(file).size>44) await handle(file);}}}); process.on('SIGINT',()=>{try{key.kill()}catch{};process.exit(0)});process.on('SIGTERM',()=>{try{key.kill()}catch{};process.exit(0)});})().catch(e=>{console.error('[VOICE STARTUP]',e.message);process.exit(1);});
+
+function stopRecording() {
+  if (!recorder) {
+    console.warn('[VOICE] stopRecording() called but no recorder exists.');
+    return Promise.resolve(null);
+  }
+
+  const currentRecorder = recorder;
+  recorder = null;
+
+  console.log('[VOICE] Stopping recording cleanly...');
+
+  return new Promise(resolve => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      console.log(`[VOICE] Recording saved: ${recordingPath}`);
+      resolve(recordingPath);
+    };
+
+    currentRecorder.once('close', finish);
+
+    try {
+      currentRecorder.stdin.write('q');
+    } catch (error) {
+      console.warn('[VOICE] Clean ffmpeg stop failed:', error.message);
+      try { currentRecorder.kill('SIGINT'); } catch { try { currentRecorder.kill(); } catch {} }
+    }
+
+    setTimeout(finish, 3000);
+  });
+}
+
+// ============================================================
+// SPEECH RESPONSE FILTER
+// ============================================================
+
+function cleanPlain(text) {
+  return String(text || '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/\*\*/g, '')
+    .replace(/__+/g, '')
+    .replace(/<@!?(\d+)>/g, '')
+    .replace(/`/g, '')
+    .replace(/^\s*[-*•]\s*/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function speechForExecution(log) {
+  const raw = String(log || '');
+  const lines = raw.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+
+  const successLines = lines
+    .filter(line => /^(?:✓|✔|\u2713)/.test(line))
+    .map(line => line.replace(/^(?:✓|✔|\u2713)\s*\d*\.?\s*/i, '').trim())
+    .filter(Boolean);
+
+  const failureLines = lines
+    .filter(line => /^(?:✗|❌|\u2717)/.test(line))
+    .map(line => line.replace(/^(?:✗|❌|\u2717)\s*\d*\.?\s*/i, '').trim())
+    .filter(Boolean);
+
+  if (successLines.length) {
+    const normalized = [];
+    for (const item of successLines) {
+      const key = item.toLowerCase().replace(/[.!?]+$/, '');
+      if (!normalized.some(x => x.toLowerCase().replace(/[.!?]+$/, '') === key)) normalized.push(item);
+    }
+
+    // Human voice should not recite an internal execution report.
+    if (normalized.length === 1) return ensureSentence(normalized[0]);
+    if (normalized.length <= 3) return ensureSentence(normalized.join(' '));
+    return 'Done.';
+  }
+
+  if (failureLines.length) {
+    const first = failureLines[0];
+    if (/^failed\b/i.test(first)) return ensureSentence(first);
+    return ensureSentence(`Failed. ${first}`);
+  }
+
+  const compact = cleanPlain(raw)
+    .replace(/^JARVIS\s+V\d+(?:\.\d+)*\s+EXECUTION\s*/i, '')
+    .replace(/^\d+\/\d+\s+step\(s\)\s+completed[^.]*\.?/i, '')
+    .trim();
+
+  if (!compact) return 'I did not receive a response from JARVIS.';
+
+  // Avoid speaking an internal report/header even when the server format changes slightly.
+  const firstUseful = compact.split(/(?<=[.!?])\s+/)[0].trim();
+  return ensureSentence(firstUseful.slice(0, 300));
+}
+
+function ensureSentence(text) {
+  const t = cleanPlain(text);
+  if (!t) return 'I did not receive a response from JARVIS.';
+  return /[.!?]$/.test(t) ? t : `${t}.`;
+}
+
+// ============================================================
+// SEND TO JARVIS
+// ============================================================
+
+async function sendText(text) {
+  console.log('[VOICE] Sending command to JARVIS...');
+
+  const response = await fetch(`${VOICE_URL}/voice`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-jarvis-voice-token': TOKEN
+    },
+    body: JSON.stringify({
+      guildId: GUILD_ID,
+      userId: USER_ID,
+      text
+    })
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || `Voice request failed (${response.status})`);
+  }
+
+  return {
+    text: String(data.text || ''),
+    speech: String(data.speechText || '').trim()
+  };
+}
+
+// ============================================================
+// LOCAL AUDIO PLAYBACK + PC FALLBACK
+// ============================================================
+
+async function playWav(file) {
+  if (!file || !fs.existsSync(file)) throw new Error(`TTS audio file not found: ${file}`);
+  if (process.platform !== 'win32') throw new Error('JARVIS local voice playback currently requires Windows.');
+  const escaped = String(file).replace(/'/g, "''");
+  await new Promise((resolve, reject) => {
+    const ps = spawn('powershell.exe', [
+      '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',
+      `$p='${escaped}'; $player=New-Object System.Media.SoundPlayer($p); $player.Load(); $player.PlaySync()`
+    ], { windowsHide: true, stdio: ['ignore','ignore','pipe'] });
+    let err='';
+    ps.stderr.on('data', d => { err += String(d); });
+    ps.once('error', reject);
+    ps.once('close', code => code===0 ? resolve() : reject(new Error(err.trim() || `Audio playback failed (${code}).`)));
+  });
+}
+
+async function speakLocal(text) {
+  const wav = await localVoice.speak(String(text || '').trim());
+  console.log(`[VOICE TTS] Playing: ${wav}`);
+  try { await playWav(wav); }
+  finally { try { if (wav && fs.existsSync(wav)) fs.unlinkSync(wav); } catch {} }
+}
+
+function normalizeVoiceTarget(value) {
+  return String(value || '').trim().replace(/[.!?,;:]+$/g, '').trim();
+}
+
+async function localPcFallback(text) {
+  const raw = String(text || '').replace(/^(?:(?:yo|hey|hi|ok|okay)\s+)?jarvis\b[,:!\s-]*/i,'').trim();
+  const target = normalizeVoiceTarget(raw);
+  if (!target) return null;
+
+  const close = target.match(/^(?:close|quit|exit|shut\s+down)\s+(?:the\s+)?(.+?)(?:\s+(?:app|application|program|window))?$/i);
+  if (close) {
+    const name = normalizeVoiceTarget(close[1]);
+    const knownWeb = new Set(['twitch','youtube','tiktok','instagram','facebook','gmail','reddit','google','x','twitter']);
+    if (knownWeb.has(name.toLowerCase())) {
+      try {
+        const active = await pcTools.activeWindow();
+        const proc = String(active?.Process || active?.process || '').toLowerCase();
+        const title = String(active?.Title || active?.title || '').toLowerCase();
+        if (proc.includes('brave') && title.includes(name.toLowerCase())) {
+          await pcTools.hotkey('CTRL+W');
+          return `Closed ${name}.`;
+        }
+        return `I can only close the ${name} tab when it is the active Brave tab.`;
+      } catch (e) {
+        return `I couldn't close ${name}. ${String(e?.message || e).slice(0,180)}`;
+      }
+    }
+    try { return await pcTools.closeApp(name); }
+    catch (e) { return String(e?.message || e).slice(0,260); }
+  }
+
+  const volume = target.match(/^(?:set\s+)?(?:the\s+)?volume\s+(?:to\s+)?(\d{1,3})\s*%?$/i);
+  if (volume) {
+    try { return await pcTools.setVolume(Number(volume[1])); }
+    catch (e) { return String(e?.message || e).slice(0,220); }
+  }
+
+  if (/^(?:pause|resume|play|toggle)\s+(?:spotify|music)?$/i.test(target)) {
+    const command = target.split(/\s+/i)[0].toLowerCase();
+    try { return await pcTools.spotifyControl(command); }
+    catch (e) { return String(e?.message || e).slice(0,220); }
+  }
+
+  const open = target.match(/^(?:open|launch|start|run)\s+(?:the\s+)?(.+)$/i);
+  if (open) {
+    const name=normalizeVoiceTarget(open[1]);
+    const web={twitch:'https://www.twitch.tv/',youtube:'https://www.youtube.com/',tiktok:'https://www.tiktok.com/',instagram:'https://www.instagram.com/',google:'https://www.google.com/'};
+    try {
+      if (web[name.toLowerCase()]) return await pcTools.openUrl(web[name.toLowerCase()],'brave');
+      await pcTools.openApp(name,[]);
+      return `Opened ${name}.`;
+    } catch (e) { return String(e?.message || e).slice(0,260); }
+  }
+  return null;
+}
+
+// ============================================================
+// HANDLE COMPLETE COMMAND
+// ============================================================
+
+async function handle(file) {
+  try {
+    console.log('[VOICE] Processing command...');
+
+    const text = await localVoice.transcribe(file);
+
+    console.log(`[VOICE] STT result: ${text || '(empty)'}`);
+
+    if (!text) {
+      await speakLocal('I did not catch that.');
+      return;
+    }
+
+    console.log(`[VOICE] You: ${text}`);
+
+    const result = await sendText(text);
+    let reply = result.text;
+    if (!reply.trim()) {
+      const localReply = await localPcFallback(text);
+      if (localReply) reply = localReply;
+    }
+
+    // Full internal result stays in the log. It is deliberately NOT sent to TTS.
+    console.log(`[VOICE] JARVIS LOG:\n${reply}`);
+
+    const speech = result.speech || speechForExecution(reply);
+    console.log(`[VOICE] JARVIS SPEECH: ${speech}`);
+
+    if (speech) await speakLocal(speech);
+  } catch (error) {
+    console.error('[VOICE ERROR]', error);
+
+    try {
+      await speakLocal(`I couldn't process that. ${error.message}`.slice(0, 260));
+    } catch (ttsError) {
+      console.error('[VOICE TTS ERROR]', ttsError.message);
+    }
+  } finally {
+    try {
+      if (file && fs.existsSync(file)) fs.unlinkSync(file);
+    } catch {}
+  }
+}
+
+// ============================================================
+// MAIN
+// ============================================================
+
+(async () => {
+  console.log('');
+  console.log('========================================');
+  console.log('       JARVIS VOICE CLIENT V20.4');
+  console.log('========================================');
+  console.log('');
+
+  console.log('[VOICE] Local STT/TTS mode. Gemini is not used for routine voice.');
+
+  if (String(process.env.JARVIS_LOCAL_VOICE_WARMUP || 'true').toLowerCase() === 'true') {
+    await localVoice.warmup();
+  }
+
+  micDevice = await findMic();
+
+  console.log(`[VOICE] Microphone: ${micDevice}`);
+  console.log('[VOICE] Hold Right Ctrl to speak.');
+  console.log('[VOICE] Release Right Ctrl to send.');
+  console.log('');
+
+  const key = psKeyWatcher();
+  let down = false;
+
+  key.stdout.setEncoding('utf8');
+
+  key.stdout.on('data', async chunk => {
+    const lines = chunk
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean);
+
+    for (const line of lines) {
+      console.log(`[VOICE KEY EVENT] ${line}`);
+
+      if (line === 'DOWN' && !down) {
+        down = true;
+        console.log('[VOICE] Right Ctrl DOWN');
+        startRecording();
+      } else if (line === 'UP' && down) {
+        down = false;
+        console.log('[VOICE] Right Ctrl UP');
+
+        const file = await stopRecording();
+
+        if (file && fs.existsSync(file)) {
+          const size = fs.statSync(file).size;
+          console.log(`[VOICE] Recording size: ${size} bytes`);
+
+          if (size > 44) {
+            console.log('[VOICE] Recording complete. Processing locally...');
+            await handle(file);
+          } else {
+            console.warn('[VOICE] Recording was empty.');
+            try { fs.unlinkSync(file); } catch {}
+          }
+        } else {
+          console.warn('[VOICE] Recording file does not exist.');
+        }
+      }
+    }
+  });
+
+  key.on('error', error => console.error('[VOICE KEY ERROR]', error.message));
+
+  const shutdown = () => {
+    console.log('\n[VOICE] Shutting down...');
+    try { key.kill(); } catch {}
+    try { if (recorder) recorder.kill(); } catch {}
+    localVoice.shutdown();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+})().catch(error => {
+  console.error('[VOICE STARTUP]', error.message);
+  process.exit(1);
+});

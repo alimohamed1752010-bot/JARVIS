@@ -43,7 +43,26 @@ if (String(process.env.DASHBOARD_ENABLED||'false').toLowerCase() !== 'true') {
         const agent=require('./core/agent');
         const pendingResult=await agent.confirmPending({message,text,config:cfg,saveConfig}).catch(()=>null);
         const result=pendingResult || await agent.runAgent({message,prompt:text,config:cfg,saveConfig,confirmed:false});
-        res.writeHead(200,{'Content-Type':'application/json'}); res.end(JSON.stringify({ok:true,handled:Boolean(result?.handled),text:String(result?.text||'')}));
+        let responseText=String(result?.text||'').trim();
+        let handled=Boolean(result?.handled);
+        // Voice must behave like an actual JARVIS invocation, not like the thin
+        // action planner. If the planner intentionally declines a request, use
+        // the normal conversational brain instead of returning an empty payload.
+        if(!responseText && !handled){
+          try {
+            const { conversationalReply } = require('./ai');
+            responseText=String(await conversationalReply({
+              message, config:cfg, saveConfig, prompt:text,
+              mode:cfg.ai?.personality||'classic', skipMemory:false,
+              context:`Voice invocation for the owner in server ${guild.name}. Answer naturally if this is not an executable PC/Discord action.`
+            })||'').trim();
+            handled=Boolean(responseText);
+          } catch(e) {
+            console.error('[VOICE BRIDGE AI]',e?.message||e);
+          }
+        }
+        if(!responseText) responseText=handled ? 'The request was handled, but JARVIS returned no text.' : 'I did not receive a response from JARVIS.';
+        res.writeHead(200,{'Content-Type':'application/json'}); res.end(JSON.stringify({ok:true,handled,text:responseText,speechText:responseText}));
       } catch(e) { res.writeHead(400,{'Content-Type':'application/json'}); res.end(JSON.stringify({ok:false,error:String(e?.message||e)})); }
       return;
     }

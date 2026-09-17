@@ -232,11 +232,25 @@ async function openApp(app,args=[]){
   }catch{}
   throw new Error(`I couldn't discover an installed application named "${requested}". I checked Windows app registrations and dynamic executable discovery.`);
 }
+const PROCESS_ALIASES={
+  spotify:['Spotify'], discord:['Discord'], brave:['brave'], chrome:['chrome'], msedge:['msedge'],
+  steam:['steam'], epicgameslauncher:['EpicGamesLauncher'], code:['Code'], obs:['obs64','obs32'],
+  explorer:['explorer'], taskmgr:['Taskmgr'], notepad:['notepad'], calc:['CalculatorApp','calc'],
+  minecraft:['MinecraftLauncher','Minecraft'], modrinth:['Modrinth App','ModrinthApp'],
+  riot:['RiotClientServices','RiotClientUx'],
+};
+
 async function closeApp(app){
   const a=normalizeApp(app); if(!a)throw new Error('Application name is missing.');
   if(!SAFE_APPS.has(a)) throw new Error(`Closing **${a}** is not in the safe application allowlist.`);
-  await runPS(`Get-Process -Name '${psEscape(a)}' -ErrorAction SilentlyContinue | Stop-Process -Force`);
-  return `Closed ${a}.`;
+  const names=PROCESS_ALIASES[a] || [`${a}`];
+  const encoded=names.map(psEscape);
+  const filter=encoded.map(n=>`$names -contains $_.ProcessName`).join(' -or ');
+  const script=`$names=@(${encoded.map(n=>"'${n}'").join(',')}); $targets=Get-Process -ErrorAction SilentlyContinue | Where-Object { ${filter} }; $count=@($targets).Count; if($count -gt 0){ $targets | Stop-Process -Force -ErrorAction Stop }; $count`;
+  const out=await runPS(script,{timeout:12000});
+  const count=Number.parseInt(String(out||'0').trim(),10)||0;
+  if(count===0) throw new Error(`${catalogAppDisplay(app)} is not currently running.`);
+  return `Closed ${catalogAppDisplay(app)}.`;
 }
 async function listProcesses(){ return runPS("Get-Process | Sort-Object CPU -Descending | Select-Object -First 25 Name,Id,CPU | Format-Table -AutoSize | Out-String"); }
 async function setVolume(percent){
