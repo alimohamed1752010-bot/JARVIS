@@ -1,7 +1,7 @@
 const { PermissionsBitField, ChannelType } = require('discord.js');
 const { parseAgentPlan } = require('../ai');
 const { resolveMember, resolveChannel } = require('./resolver');
-const { resolveRole, resolveChannelAny, normalizePermission, normalizeRoleColor } = require('./discordActionUtils');
+const { resolveRole, resolveChannelAny, normalizePermission } = require('./discordActionUtils');
 const { execute } = require('./executor');
 const journal = require('./journal');
 const { getSession } = require('../v8/core');
@@ -12,41 +12,19 @@ const awareness = require('./awareness');
 const serverKnowledge = require('./serverKnowledge');
 const serverGraph = require('./serverGraph');
 const { validatePlan, summarize: summarizePlan } = require('./planValidator');
-const pc = require('./pcTools');
-const pcBridge = require('./pcBridge');
-const { WEB_ALIASES, KNOWN_APPS, APP_ALIASES } = require('./pcCatalog');
-const localVault = require('./localVault');
 
 const MAX_STEPS = 20;
 const MAX_AGENT_LOOPS = Math.min(Math.max(Number(process.env.JARVIS_AGENT_LOOPS || 2), 1), 4);
-const HIGH_RISK = new Set(['ban','kick','timeout','role_permissions','role_edit','role_add','role_remove','channel_edit','channel_delete','role_delete','channel_create','role_create','member_nickname','channel_permissions','server_restore','autopilot','server_relationship']);
+const HIGH_RISK = new Set(['ban','kick','timeout','role_permissions','role_add','role_remove','channel_edit','channel_delete','role_delete','channel_create','role_create','member_nickname','channel_permissions','server_restore','autopilot','server_relationship']);
 
 
-const { CREATOR_ID } = require('./identity');
-function parseNaturalDuration(text){const m=String(text||'').match(/(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\b/i);if(!m)return 10*60*1000;const n=Number(m[1]);const u=m[2].toLowerCase();const mult=/^(?:s|sec)/.test(u)?1000:/^(?:m|min)/.test(u)?60000:/^(?:h|hr)/.test(u)?3600000:86400000;return Math.min(Math.max(n*mult,1000),28*24*60*60*1000);}
 // Deterministic safety-net for common multi-step administration requests.
 // The AI planner remains the primary natural-language planner, but a temporary
 // model failure must not turn a clearly structured request into "no valid plan".
 function deterministicAgentPlan(prompt) {
-  let raw=String(prompt||'').replace(/^(?:(?:yo|hey|hi|ok|okay)\s+)?jarvis\b[,:!\s-]*/i,'').trim().replace(/^(?:yo\s+)?(?:get\s+everything\s+ready|everything\s+ready)[.!,:;\s-]*/i,'').trim();
+  const raw=String(prompt||'').replace(/^jarvis\b[,:!\s-]*/i,'').trim();
   if(!raw)return null;
   const base=(action,extra={})=>({action,targets:[],excludeTargets:[],source:'',destination:'',role:'',channel:'',parent:'',channelType:'text',name:'',permissionChanges:[],reason:'Owner-directed JARVIS action',durationMs:600000,...extra});
-
-  // V18.8: preserve mixed PC + Discord commands as one ordered plan.
-  // Example: "open tiktok then time oraby out for 1 minute" must execute
-  // the navigation AND the timeout instead of letting the PC plan swallow the
-  // moderation half. The timeout clause is extracted only when it is an
-  // explicit terminal "time <target> out [for <duration>]" phrase.
-  let extractedTimeout=null;
-  const timeoutMatch=raw.match(/(?:^|\s+(?:and|then)\s+|[,;]\s*)time\s+(.+?)\s+out(?:\s+for\s+(.+?))?$/i);
-  // If the timeout is the ENTIRE request, leave it intact so the normal
-  // moderation parser below handles it. The old extractor consumed the
-  // whole string at index 0, turning `time Oraby out` into an empty request
-  // and allowing the conversational/clock fallback to answer instead.
-  if(timeoutMatch && timeoutMatch.index > 0){
-    extractedTimeout={target:timeoutMatch[1].trim(),durationMs:timeoutMatch[2]?parseNaturalDuration(timeoutMatch[2]):10*60*1000};
-    raw=raw.slice(0,timeoutMatch.index).replace(/(?:[,;]|\b(?:and|then))\s*$/i,'').trim();
-  }
   const previewMatch=raw.match(/^(?:preview|simulate|dry run|dry-run)\s+(.+)$/i);
   if(previewMatch){ const p=deterministicAgentPlan(previewMatch[1]); if(p) return p; }
   if(/^(?:show|view)\s+(?:action )?history(?:\s+(\d+))?$/i.test(raw)) return {summary:'Show recent JARVIS action history.',needsConfirmation:false,steps:[base('history')]};
@@ -54,114 +32,6 @@ function deterministicAgentPlan(prompt) {
   if(/^(?:incident report|security incident|show incident)$/i.test(raw)) return {summary:'Generate a JARVIS incident report.',needsConfirmation:false,steps:[base('incident_report')]};
   let sm=raw.match(/^schedule\s+(\d+)\s*(s|sec|m|min|h|hr|d|day)s?\s+(.+)$/i);
   if(sm){const mult={s:1000,sec:1000,m:60000,min:60000,h:3600000,hr:3600000,d:86400000,day:86400000}[sm[2].toLowerCase()]||60000;return {summary:`Schedule JARVIS to run: ${sm[3]}`,needsConfirmation:true,steps:[base('schedule_action',{durationMs:Math.min(Number(sm[1])*mult,7*86400000),reason:sm[3].trim()})]};}
-  if (/^(?:what(?:'s| is) (?:running|open)(?: on (?:my )?(?:pc|computer))?|what(?:'s| is) running on (?:my )?(?:pc|computer)|show (?:me )?(?:what|which) apps are running|list (?:running )?processes|what apps are open)$/i.test(raw)) return {summary:'Inspect running applications and processes on the PC.',needsConfirmation:false,steps:[base('pc_processes')]};
-  if (/^(?:what(?:'s| is) on (?:my )?screen|what(?:'s| is) the active window|which window is active|what app is (?:currently )?active|what(?:'s| is) in the foreground)$/i.test(raw)) return {summary:'Inspect the active Windows window.',needsConfirmation:false,steps:[base('pc_active_window')]};
-  if (/^(?:how much|what(?:'s| is) the amount of) (?:ram|memory)(?: am i using| is (?:being )?used| usage)?(?: on (?:my )?(?:pc|computer))?\??$/i.test(raw) || /^(?:what(?:'s| is) my|how much is my) (?:ram|memory) usage\??$/i.test(raw)) return {summary:'Inspect current RAM usage on the PC.',needsConfirmation:false,steps:[base('pc_system_status')]};
-  if (/^(?:what(?:'s| is) my|how much is my) cpu (?:usage|load)|^(?:what(?:'s| is) the|how high is the) cpu (?:usage|load)|^(?:how much) cpu (?:am i using|is being used)\??$/i.test(raw)) return {summary:'Inspect current CPU usage on the PC.',needsConfirmation:false,steps:[base('pc_system_status')]};
-  if (/^(?:how much|what(?:'s| is)) (?:free )?(?:storage|disk space|space)(?: do i have| is left| remains| do i have left)?(?: on (?:my )?(?:pc|computer))?\??$/i.test(raw) || /^(?:how much|what(?:'s| is)) free space do i have(?: left)?\??$/i.test(raw)) return {summary:'Inspect current storage availability on the PC.',needsConfirmation:false,steps:[base('pc_system_status')]};
-  if (/^(?:pc|computer|system) (?:status|health|report|status report|health report)|^(?:give|show|run|generate) (?:me )?(?:a )?(?:pc|computer|system) (?:status|health|status report|health report)|^(?:how is|check) (?:my )?(?:pc|computer|system)$/i.test(raw)) return {summary:'Inspect current Windows PC health and resource state.',needsConfirmation:false,steps:[base('pc_state')]};
-  if (/^(?:network|internet|connection) (?:status|health)|^is my internet (?:working|up)$/i.test(raw)) return {summary:'Inspect current Windows network state.',needsConfirmation:false,steps:[base('pc_network_status')]};
-  if (/^(?:take|capture|grab) (?:a )?(?:screenshot|screen shot)$/i.test(raw)) return {summary:'Capture the primary display.',needsConfirmation:false,steps:[base('pc_screenshot')]};
-  // Natural moderation phrasing: "time @user out for 1 minute" maps to Discord timeout.
-  let tm=raw.match(/^(?:time|put)\s+(.+?)\s+out(?:\s+for\s+(.+))?$/i);
-  if(tm) return {summary:`Timeout ${tm[1].trim()}${tm[2]?` for ${tm[2].trim()}`:''}.`,needsConfirmation:true,steps:[base('timeout',{targets:[tm[1].trim()],durationMs:tm[2]?parseNaturalDuration(tm[2]):10*60*1000})]};
-  // V20.4: deterministic app-close routing. Closing an app is a local PC action,
-  // so do not make the AI planner guess whether "close Spotify" is a Discord request.
-  const closeMatch=raw.match(/^\s*(?:close|quit|exit|shut\s+down)\s+(?:the\s+)?(.+?)\s*$/i);
-  if(closeMatch){
-    const target=closeMatch[1].trim().replace(/\b(app|application|program|window)\b$/i,'').trim();
-    if(target) return {summary:`Close ${target}.`,needsConfirmation:false,steps:[base('pc_close_app',{name:target})]};
-  }
-
-  // Desktop command fallback: natural-language PC requests should never fall through
-  // to a conversational reply just because the AI planner is unavailable or chooses
-  // not to emit a tool plan. This is intentionally deterministic and only creates
-  // actions for the dedicated, allowlisted PC tools.
-  {
-    const steps=[];
-    const catalogTerms=[...Object.keys(WEB_ALIASES),...KNOWN_APPS,...Object.keys(APP_ALIASES),'volume','browser','music'].sort((a,b)=>b.length-a.length);
-    const catalogPattern=new RegExp('(?:^|\\s|[,;])(?:'+catalogTerms.map(x=>String(x).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|')+')(?:$|\\s|[,;.!?])','i');
-    const hasPC=/\b(?:open|launch|start|run|play|put|turn|set|make|get|fire|boot|go to|visit)\b/i.test(raw) && catalogPattern.test(raw);
-    if(hasPC){
-      const pushApp=(name)=>{ if(!steps.some(x=>x.action==='pc_open_app'&&x.name===name)) steps.push(base('pc_open_app',{name})); };
-      // Browser intent: "open youtube" means navigate to YouTube, not a search.
-      if(/\b(?:open|launch|start|go to)\s+youtube\b/i.test(raw)) {
-        steps.push(base('pc_open_url',{name:'https://www.youtube.com/',reason:'brave'}));
-      }
-      // Common web destinations. These are navigation intents, not installed apps.
-      const webAliases={
-        gmail:'https://mail.google.com/',
-        'google mail':'https://mail.google.com/',
-        tiktok:'https://www.tiktok.com/',
-        instagram:'https://www.instagram.com/',
-        facebook:'https://www.facebook.com/',
-        twitch:'https://www.twitch.tv/',
-        reddit:'https://www.reddit.com/',
-        google:'https://www.google.com/'
-      };
-      const webOpenSteps=[];
-      for(const [name,url] of Object.entries(webAliases)){
-        const escapedName=name.replace(/ /g,'\\s+');
-        const re=new RegExp('(?:\\b(?:open|launch|start|go to)\\s+'+escapedName+'\\b|\\b(?:and|then)\\s+'+escapedName+'\\b)','i');
-        const hit=re.exec(raw);
-        if(hit) webOpenSteps.push({step:base('pc_open_url',{name:url,reason:'brave'}),index:hit.index});
-      }
-      webOpenSteps.sort((a,b)=>a.index-b.index);
-      for(const item of webOpenSteps){
-        if(!steps.some(x=>x.action==='pc_open_url'&&x.name===item.step.name)) steps.push(item.step);
-      }
-      // Broad website catalog: navigation is always treated as a URL intent first.
-      // This keeps hundreds of common sites from falling through to conversational AI.
-      for(const [site,url] of Object.entries(WEB_ALIASES)){
-        const escaped=site.replace(/[.*+?^${}()|[\]\\]/g,'\\$&').replace(/\s+/g,'\\s+');
-        const re=new RegExp('\\b(?:open|launch|start|go to|visit)\\s+'+escaped+'(?:\\s+in\\s+(?:brave|chrome|edge|firefox|opera))?\\b','i');
-        if(re.test(raw) && !steps.some(x=>x.action==='pc_open_url'&&x.name===url)) steps.push(base('pc_open_url',{name:url,reason:'brave'}));
-      }
-      // Stop a browser-search query at the next explicit action, including comma-separated
-      // commands. Without this, a sentence like "search YouTube for Minecraft PvP, put on
-      // Spotify, set the volume to 50" gets swallowed as one enormous search query.
-      const search=raw.match(/(?:search|look\s+up|find)\s+(?:youtube\s+)?(?:for\s+)?(.+?)(?=\s*(?:,|;)\s*(?:(?:and|then)\s+)?(?:open|launch|start|play|put\s+on|set|make|run|fire\s+up)\b|\s+(?:and|then)\s+(?:open|launch|start|play|put\s+on|set|make|run|fire\s+up)\b|$)/i);
-      if(search && search[1].trim() && !/^youtube$/i.test(search[1].trim())) steps.push(base('pc_browser_search',{name:search[1].trim().replace(/[\s,;]+$/,''),reason:'brave'}));
-      if(/\b(?:open|launch|start|run|get|fire up)\s+(?:brave|brave browser)\b/i.test(raw)) pushApp('brave');
-      if(/\b(?:open|launch|start|run|get|fire up)\s+(?:chrome|google chrome)\b/i.test(raw)) pushApp('chrome');
-      if(/\b(?:open|launch|start|run|get|fire up)\s+(?:edge|microsoft edge)\b/i.test(raw)) pushApp('msedge');
-      if(/\b(?:open|launch|start|run|put on|get|fire up)\s+spotify\b/i.test(raw)) pushApp('spotify');
-      if(/\b(?:open|launch|start|run|play|fire up|get)\s+rocket\s*league\b/i.test(raw)) pushApp('Rocket League');
-      if(/\b(?:open|launch|start|run|play|fire up|get)\s+(?:modrinth|modrinth app)\b/i.test(raw)) pushApp('Modrinth App');
-      if(/\b(?:open|launch|start|run|play|fire up|get)\s+(?:epic|epic games|epic games launcher)\b/i.test(raw)) pushApp('Epic Games Launcher');
-      // Natural app requests. These are intentionally passed as names instead of executable paths;
-      // the Windows agent dynamically discovers the installed registration.
-      const appWords=raw.match(/(?:\b(?:open|launch|start|run|play|fire up|get)\s+)([A-Za-z0-9][A-Za-z0-9 .+&_-]{1,60}?)(?=\s+(?:and|then|also)\s+|$)/gi)||[];
-      for(const phrase of appWords){
-        const m=phrase.match(/(?:open|launch|start|run|play|fire up|get)\s+(.+)/i);
-        const candidate=m?.[1]?.trim();
-        const isCatalogWeb=Object.keys(WEB_ALIASES).some(x=>x.toLowerCase()===String(candidate||'').toLowerCase());
-        const isKnownApp=KNOWN_APPS.some(x=>x.toLowerCase()===String(candidate||'').toLowerCase()) || Object.keys(APP_ALIASES).some(x=>x.toLowerCase()===String(candidate||'').toLowerCase());
-        // V18.5: "play <track> on Spotify" is a Spotify music intent, never an app name.
-        const isSpotifyTrackPhrase=/^(?:.+?)\s+(?:on|in)\s+spotify$/i.test(String(candidate||''));
-        if(candidate && !isSpotifyTrackPhrase && !isCatalogWeb && (isKnownApp || candidate.length<=60) && !/^(the )?(volume|music|browser)$/i.test(candidate)) pushApp(candidate);
-      }
-      // Spotify transport controls. These are deterministic because 'pause music'
-      // is not a philosophical question and does not need an AI committee meeting.
-      if(/^\s*(?:pause|stop)(?:\s+(?:the\s+)?(?:music|song|track|spotify))?\s*$/i.test(raw) && !/\b(?:pause|stop)\s+(?:the\s+)?(?:download|recording)\b/i.test(raw)) steps.push(base('pc_spotify_control',{name:'pause'}));
-      else if(/^\s*(?:resume|continue)(?:\s+(?:the\s+)?(?:music|song|track|spotify))?\s*$/i.test(raw)) steps.push(base('pc_spotify_control',{name:'play'}));
-      else if(/^\s*(?:play|start)(?:\s+(?:the\s+)?(?:music|song|track|spotify))?\s*$/i.test(raw) && !/\b(?:play|start)\s+.+\s+(?:on|in)\s+spotify\b/i.test(raw)) steps.push(base('pc_spotify_control',{name:'play'}));
-      const play=raw.match(/\b(?:play|put on)\s+(.+?)(?=\s*(?:,|;)\s*(?:(?:and|then)\s+)?(?:set|make|run|open|launch|start|put\s+on)\b|\s+(?:and|then)\s+(?:set|make|run|open|launch|start)\b|$)/i);
-      // "put on Spotify" means launch Spotify, not search Spotify for a track
-      // literally named "Spotify". Humanity has suffered enough from that bug.
-      if(play && /\bspotify\b/i.test(raw) && !/^spotify$/i.test(play[1].trim())) {
-        const track=play[1].trim().replace(/\s+(?:on|in)\s+spotify\s*$/i,'').trim();
-        if(track) steps.push(base('pc_spotify_play',{name:track}));
-      }
-      const vol=raw.match(/(?:set|make)\s+(?:the\s+)?volume\s+(?:to\s+)?(\d{1,3})\s*%?/i);
-      if(vol) steps.push(base('pc_volume',{durationMs:Math.max(0,Math.min(100,Number(vol[1])))}));
-      if(/\b(?:run|open|launch|start|play|fire up|get)\s+(?:minecraft|mc|minecraft java)\b/i.test(raw)) pushApp('Minecraft');
-      if(extractedTimeout){
-        steps.push(base('timeout',{targets:[extractedTimeout.target],durationMs:extractedTimeout.durationMs}));
-      }
-      if(steps.length) return {summary:extractedTimeout?'Execute the requested PC and Discord actions in order.':'Execute the requested Windows desktop actions.',needsConfirmation:Boolean(extractedTimeout),steps};
-    }
-  }
   if(/^schedule\s+list$/i.test(raw)) return {summary:'List scheduled JARVIS actions.',needsConfirmation:false,steps:[base('schedule_list')]};
   const sc=raw.match(/^schedule\s+cancel\s+(\S+)$/i); if(sc)return {summary:`Cancel scheduled action ${sc[1]}.`,needsConfirmation:false,steps:[base('schedule_cancel',{name:sc[1]})]};
   if(/^health(?: score)?$/i.test(raw)) return {summary:'Show the JARVIS server health score.',needsConfirmation:false,steps:[base('health_score')]};
@@ -180,28 +50,6 @@ function deterministicAgentPlan(prompt) {
   m=raw.match(/^(?:make|create)\s+(?:(?:a|the)\s+)?role\s+named\s+["“](.+?)["”]\s*,?\s*(?:with|that\s+has)\s+(.+?)\s*(?:,?\s+and\s+then|\s+then)\s+(?:give|add)\s+(?:it|that\s+role|the\s+role)\s+to\s+(.+)$/i);
   if(!m)m=raw.match(/^(?:make|create)\s+(?:(?:a|the)\s+)?role\s+named\s+["“](.+?)["”]\s*,?\s*(?:with|that\s+has)\s+(.+?)\s*,?\s+and\s+(?:give|add)\s+(?:it|that\s+role|the\s+role)\s+to\s+(.+)$/i);
   if(m){const permissionChanges=parsePermissionList(m[2]);if(m[1].trim()&&permissionChanges.length&&m[3].trim())return{summary:`Create role "${m[1].trim()}" with the requested permissions and assign it to ${m[3].trim()}.`,needsConfirmation:false,steps:[base('role_create',{name:m[1].trim(),permissionChanges}),base('role_add',{role:m[1].trim(),targets:splitVoiceTargets(m[3].trim())})]};}
-  // Natural "called ... make it COLOR, give it PERMS, then give it to MEMBER" form.
-  m=raw.match(/^(?:make|create)\s+(?:(?:a|the)\s+)?role\s+(?:called|named)\s+["“]?(.+?)["”]?\s+(?:and\s+)?make\s+it\s+(.+?)\s*,?\s*(?:then\s+)?give\s+it\s+(?:the\s+)?(?:permissions?|perms?)\s+(.+?)\s*,?\s*(?:and\s+then\s+|then\s+)?give\s+it\s+to\s+(.+)$/i);
-  if(m){
-    const color=normalizeRoleColor(m[2].trim())||m[2].trim();
-    const permissionChanges=parsePermissionList(m[3]);
-    if(m[1].trim()&&permissionChanges.length&&m[4].trim())
-      return {summary:`Create role "${m[1].trim()}", set its color to ${color}, give it the requested permissions, and assign it to ${m[4].trim()}.`,needsConfirmation:false,steps:[
-        base('role_create',{name:m[1].trim(),color,permissionChanges}),
-        base('role_add',{role:m[1].trim(),targets:splitVoiceTargets(m[4].trim())})
-      ]};
-  }
-  // Also accept "create a role called X, make it COLOR, give it PERM1 and PERM2, then give it to USER".
-  m=raw.match(/^(?:make|create)\s+(?:(?:a|the)\s+)?role\s+(?:called|named)\s+["“]?(.+?)["”]?\s*,?\s*(?:and\s+)?make\s+it\s+(.+?)\s*,?\s*(?:give|add)\s+it\s+(?:the\s+)?(.+?)\s*,?\s*(?:and\s+then\s+|then\s+)?(?:give|add)\s+it\s+to\s+(.+)$/i);
-  if(m){
-    const color=normalizeRoleColor(m[2].trim())||m[2].trim();
-    const permissionChanges=parsePermissionList(m[3]);
-    if(m[1].trim()&&permissionChanges.length&&m[4].trim())
-      return {summary:`Create role "${m[1].trim()}", set its color to ${color}, configure permissions, and assign it to ${m[4].trim()}.`,needsConfirmation:false,steps:[
-        base('role_create',{name:m[1].trim(),color,permissionChanges}),
-        base('role_add',{role:m[1].trim(),targets:splitVoiceTargets(m[4].trim())})
-      ]};
-  }
   // Also accept an unquoted role name for ordinary natural-language commands.
   if(!m)m=raw.match(/^(?:make|create)\s+(?:(?:a|the)\s+)?role\s+named\s+(.+?)\s+(?:with|that\s+has)\s+(.+?)\s*,?\s+and\s+(?:give|add)\s+(?:it|that\s+role|the\s+role)\s+to\s+(.+)$/i);
   if(m){const permissionChanges=parsePermissionList(m[2]);const name=m[1].trim().replace(/^["“]|["”]$/g,'').trim();if(name&&permissionChanges.length&&m[3].trim())return{summary:`Create role "${name}" with the requested permissions and assign it to ${m[3].trim()}.`,needsConfirmation:false,steps:[base('role_create',{name,permissionChanges}),base('role_add',{role:name,targets:splitVoiceTargets(m[3].trim())})]};}
@@ -223,11 +71,11 @@ function cleanPlan(plan) {
     targets: Array.isArray(s?.targets) ? s.targets.map(String).map(x => x.trim()).filter(Boolean).slice(0, 50) : [],
     excludeTargets: Array.isArray(s?.excludeTargets) ? s.excludeTargets.map(String).map(x => x.trim()).filter(Boolean).slice(0, 50) : [],
     source: String(s?.source || '').trim(), destination: String(s?.destination || '').trim(),
-    role: String(s?.role || '').trim(), channel: String(s?.channel || '').trim(), parent: String(s?.parent || '').trim(), channelType: String(s?.channelType || 'text').trim().toLowerCase(), name: String(s?.name || '').trim().slice(0,100), color: String(s?.color || '').trim().slice(0,20), hoist: typeof s?.hoist==='boolean'?s.hoist:null, mentionable: typeof s?.mentionable==='boolean'?s.mentionable:null,
+    role: String(s?.role || '').trim(), channel: String(s?.channel || '').trim(), parent: String(s?.parent || '').trim(), channelType: String(s?.channelType || 'text').trim().toLowerCase(), name: String(s?.name || '').trim().slice(0,100),
     permissionChanges: Array.isArray(s?.permissionChanges) ? s.permissionChanges.map(x => ({permission:String(x?.permission||'').trim(),enabled:Boolean(x?.enabled)})).filter(x=>x.permission).slice(0,30) : [],
     caseId: String(s?.caseId || '').trim(),
     createParentIfMissing:Boolean(s?.createParentIfMissing),
-    reason: String(s?.reason || '').trim().slice(0,500), durationMs: String(s?.action||'').toLowerCase()==='pc_volume' ? Number(s?.durationMs ?? 50) : Math.min(Math.max(Number(s?.durationMs)||600000,1000),28*24*60*60*1000),
+    reason: String(s?.reason || '').trim().slice(0,500), durationMs: Math.min(Math.max(Number(s?.durationMs)||600000,1000),28*24*60*60*1000),
   })).filter(s => s.action);
   return { summary:String(plan.summary||'').trim().slice(0,500), needsConfirmation:Boolean(plan.needsConfirmation)||steps.some(s=>HIGH_RISK.has(s.action)), steps };
 }
@@ -261,55 +109,8 @@ async function resolveDestination(guild, query, voiceOnly=false) {
   return r.channel;
 }
 
-function formatPCObservation(action, text, details) {
-  if (action === 'pc_active_window' && details) {
-    const title = String(details.Title || '').trim() || '(untitled)';
-    const process = String(details.Process || '').trim() || 'unknown';
-    const pid = Number(details.PID || 0);
-    return `🪟 **Active Window**\n• **App:** ${process}\n• **Window:** ${title}\n• **PID:** ${pid || 'unknown'}`;
-  }
-  if (action === 'pc_system_status' && details) {
-    const cpu = Number(details.cpuPercent);
-    const used = Number(details.ramUsedGB);
-    const total = Number(details.ramTotalGB);
-    const ramPct = total > 0 ? Math.round((used / total) * 100) : null;
-    const disks = Array.isArray(details.disks) ? details.disks : [];
-    const diskText = disks.length ? disks.map(d => `• **${d.Drive}:** ${Number(d.FreeGB).toFixed(1)} GB free / ${Number(d.SizeGB).toFixed(1)} GB`).join('\n') : '• No local disks reported';
-    return `🖥️ **PC Status**\n• **Computer:** ${details.computer || 'unknown'}\n• **Windows:** ${details.windows || 'unknown'}\n• **CPU:** ${Number.isFinite(cpu) ? `${cpu}%` : 'unknown'}\n• **RAM:** ${Number.isFinite(used) && Number.isFinite(total) ? `${used.toFixed(1)} / ${total.toFixed(1)} GB${ramPct !== null ? ` (${ramPct}%)` : ''}` : 'unknown'}\n**Storage**\n${diskText}`;
-  }
-  if (action === 'pc_processes') {
-    const raw = String(text || '').trim();
-    const lines = raw.split(/\r?\n/).map(x => x.trimEnd()).filter(Boolean);
-    const rows = lines.filter(x => !/^Name\s+Id\s+CPU$/i.test(x) && !/^-{3,}/.test(x));
-    const cleaned = rows.slice(0, 15).map(x => `• ${x.trim()}`);
-    return `⚙️ **Top Running Processes**\n${cleaned.length ? cleaned.join('\n') : '• No process data returned.'}`;
-  }
-  if (action === 'pc_state' && details) {
-    const st = details.status || {};
-    const win = details.activeWindow || {};
-    const cpu = Number(st.cpuPercent), used = Number(st.ramUsedGB), total = Number(st.ramTotalGB);
-    const ramPct = total > 0 ? Math.round((used / total) * 100) : null;
-    const disks = Array.isArray(st.disks) ? st.disks : [];
-    const diskText = disks.length ? disks.map(d => `${d.Drive}: ${Number(d.FreeGB).toFixed(1)} GB free`).join(' • ') : 'none reported';
-    return `🖥️ **PC Status Report**\n• **Computer:** ${st.computer || 'unknown'}\n• **CPU:** ${Number.isFinite(cpu) ? `${cpu}%` : 'unknown'}\n• **RAM:** ${Number.isFinite(used) && Number.isFinite(total) ? `${used.toFixed(1)} / ${total.toFixed(1)} GB${ramPct !== null ? ` (${ramPct}%)` : ''}` : 'unknown'}\n• **Storage:** ${diskText}\n• **Active Window:** ${win.Process || 'unknown'}${win.Title ? ` — ${win.Title}` : ''}`;
-  }
-  if (action === 'pc_network_status' && details) {
-    const adapters = Array.isArray(details.Adapters) ? details.Adapters : [];
-    const interfaces = Array.isArray(details.Interfaces) ? details.Interfaces : [];
-    return `🌐 **Network Status**\n**Adapters**\n${adapters.length ? adapters.map(a => `• ${a.Name || 'unknown'} — ${a.Status || 'unknown'}${a.LinkSpeed ? ` (${a.LinkSpeed})` : ''}`).join('\n') : '• None reported'}\n**Connections**\n${interfaces.length ? interfaces.map(i => `• ${i.InterfaceAlias || 'unknown'} — ${i.IPv4 || 'no IPv4'} → ${i.Gateway || 'no gateway'}`).join('\n') : '• None reported'}`;
-  }
-  return text;
-}
-
 async function runStep({message,step,config,saveConfig,dryRun=false}) {
   const action=step.action;
-  if (action.startsWith('pc_')) {
-    if (dryRun) return {ok:true,simulated:true,text:`Would execute PC action **${action}**${step.name?` → ${step.name}`:''}.`};
-    // Railway is the brain; Windows is the hands. Never try to run PC tools on Railway.
-    if (!pcBridge.status().connected) throw new Error('PC agent is offline. Start START-JARVIS-PC.bat on the Windows PC.');
-    const result=await pcBridge.execute(action,step,45000);
-    return {ok:true,text:formatPCObservation(action,result?.text||`Executed **${action}** on the PC.`,result?.details),details:result?.details};
-  }
   if(action==='history') { const superior=require('../systems/superior'); return {ok:true,text:superior.formatHistory(config,step.name||10)}; }
   if(action==='incident_report') { const superior=require('../systems/superior'); return {ok:true,text:superior.incidentReport(config,message.guild)}; }
   if(action==='case_explain') { const superior=require('../systems/superior'); return {ok:true,text:superior.explainCase(config,step.caseId||step.name)}; }
@@ -370,15 +171,8 @@ async function runStep({message,step,config,saveConfig,dryRun=false}) {
     if(!message.guild.members.me.permissions.has(PermissionsBitField.Flags.ManageRoles)) throw new Error('I need Manage Roles.');
     const perms=new PermissionsBitField();
     for(const c of step.permissionChanges||[]){const flag=normalizePermission(c.permission);if(!flag)throw new Error(`Unknown permission **${c.permission}**.`);if(c.enabled)perms.add(flag);}
-    const normalizedColor = step.color ? normalizeRoleColor(step.color) : null;
-    if(step.color && !normalizedColor) throw new Error(`Invalid role color **${step.color}**. Use a hex color or a recognizable color name.`);
-    if(dryRun) return {ok:true,simulated:true,text:`Would create role **${step.name}**${normalizedColor?` with color **${normalizedColor}**`:''}${step.permissionChanges.length?` and ${step.permissionChanges.length} permission change(s)`:''}.`};
-    const options={name:step.name,permissions:perms,reason:step.reason||'JARVIS AI: owner-directed role creation'};
-    if(normalizedColor) options.color=normalizedColor;
-    const role=await message.guild.roles.create(options);
-    journal.record(config,{action:'ROLE_CREATE',actorId:message.author.id,targetId:role.id,reason:step.reason,before:null,after:{name:role.name,color:role.hexColor,permissions:role.permissions.bitfield.toString()},reversible:false});
-    saveConfig(message.guild.id,config);
-    return {ok:true,text:`Created role **${role.name}**${normalizedColor?` with color **${normalizedColor}**`:''}.`,roleId:role.id};
+    if(dryRun) return {ok:true,simulated:true,text:`Would create role **${step.name}**${step.permissionChanges.length?` with ${step.permissionChanges.length} permission change(s)`:''}.`};
+    const role=await message.guild.roles.create({name:step.name,permissions:perms,reason:step.reason||'JARVIS V12'}); journal.record(config,{action:'ROLE_CREATE',actorId:message.author.id,targetId:role.id,reason:step.reason,before:null,after:{name:role.name,permissions:role.permissions.bitfield.toString()},reversible:false}); saveConfig(message.guild.id,config); return {ok:true,text:`Created role **${role.name}**.`,roleId:role.id};
   }
   if (action==='role_delete') {
     const rr=resolveRole(message.guild,step.role); if(rr.status!=='resolved') throw new Error(`I couldn't uniquely resolve role **${step.role}**.`); if(rr.role.managed||!rr.role.editable) throw new Error(`Discord will not let me delete **${rr.role.name}**.`);
@@ -390,14 +184,10 @@ async function runStep({message,step,config,saveConfig,dryRun=false}) {
   }
   if (action==='channel_permissions') {
     const ch=await resolveDestination(message.guild,step.channel,false); if(!ch.manageable) throw new Error(`Discord will not let me edit **${ch.name}**.`);
-    const ref=String(step.role||'').trim();
-    let overwriteTarget=null;
-    if(/^@?everyone$/i.test(ref)) overwriteTarget=message.guild.roles.everyone;
-    else { const rr=resolveRole(message.guild,ref); if(rr.status==='resolved') overwriteTarget=rr.role; else { const mr=await resolveMember(message.guild,ref); if(mr.status==='resolved') overwriteTarget=mr.member; } }
-    if(!overwriteTarget) throw new Error(`I couldn't uniquely resolve permission target **${ref}**.`);
+    const rr=resolveRole(message.guild,step.role); if(rr.status!=='resolved') throw new Error(`I couldn't uniquely resolve role **${step.role}**.`);
     const overwrites=step.permissionChanges.map(c=>[normalizePermission(c.permission),c.enabled]); if(overwrites.some(([f])=>!f)) throw new Error('One or more permissions are unknown.');
-    if(dryRun) return {ok:true,simulated:true,text:`Would update **#${ch.name}** permissions for **${overwriteTarget.name || overwriteTarget.user?.tag || 'target'}**.`};
-    const allow=overwrites.filter(([,e])=>e).map(([f])=>f),deny=overwrites.filter(([,e])=>!e).map(([f])=>f); await ch.permissionOverwrites.edit(overwriteTarget,{allow,deny}, step.reason||'JARVIS AI'); return {ok:true,text:`Updated **#${ch.name}** permissions for **${overwriteTarget.name || overwriteTarget.user?.tag || 'target'}**.`};
+    if(dryRun) return {ok:true,simulated:true,text:`Would update **#${ch.name}** permissions for **${rr.role.name}**.`};
+    const allow=overwrites.filter(([,e])=>e).map(([f])=>f),deny=overwrites.filter(([,e])=>!e).map(([f])=>f); await ch.permissionOverwrites.edit(rr.role,{allow,deny}, step.reason||'JARVIS V11'); return {ok:true,text:`Updated **#${ch.name}** permissions for **${rr.role.name}**.`};
   }
   throw new Error(`Unsupported agent action: ${action}`);
 }
@@ -415,13 +205,6 @@ async function verifyStep(message, step, result) {
         const failed=members.filter(m=>!excluded.has(m.id)&&!excluded.has(m.user?.username?.toLowerCase())&&m.voice?.channelId!==destination.id);
         if(failed.length) return {ok:false,reason:`${failed.length} member(s) did not end up in **${destination.name}**.`};
       }
-    }
-    if (step.action==='role_edit') {
-      const rr=resolveRole(guild,step.role); if(rr.status!=='resolved') return {ok:false,reason:`Could not verify role **${step.role}**.`};
-      if(step.name && rr.role.name!==step.name)return {ok:false,reason:'Role name change could not be verified.'};
-      if(step.color && String(rr.role.hexColor).toLowerCase()!==String(step.color).replace(/^#/,'#').toLowerCase())return {ok:false,reason:'Role color change could not be verified.'};
-      if(typeof step.hoist==='boolean' && rr.role.hoist!==step.hoist)return {ok:false,reason:'Role hoist setting could not be verified.'};
-      if(typeof step.mentionable==='boolean' && rr.role.mentionable!==step.mentionable)return {ok:false,reason:'Role mentionable setting could not be verified.'};
     }
     if (step.action==='role_permissions') {
       const rr=resolveRole(guild,step.role); if(rr.status!=='resolved') return {ok:false,reason:`Could not verify role **${step.role}**.`};
@@ -468,85 +251,17 @@ async function executePlan({message,plan,config,saveConfig,dryRun=false}) {
   const failed=outputs.find(x=>!x.ok||x.verified===false);
   journal.record(config,{action:'PLAN_EXECUTION',actorId:message.author.id,reason:plan.summary,before:null,after:{steps:success,total:plan.steps.length,verified},reversible:false,metadata:{summary:plan.summary,steps:plan.steps.map(s=>s.action)}});
   saveConfig(message.guild.id,config);
-  return {handled:true,text:`**JARVIS V18.3 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
+  return {handled:true,text:`**JARVIS V12 EXECUTION**\n${success}/${plan.steps.length} step(s) completed and ${verified}/${Math.max(success,1)} verified.${failed?`\n⚠ ${failed.text||'A step failed.'}`:''}${outputs.map((x,i)=>`\n${x.ok&&x.verified!==false?'✓':'✗'} ${i+1}. ${x.text}`).join('')}`};
 }
 
 async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
-  const isOwner=Boolean(CREATOR_ID && String(message.author.id)===CREATOR_ID);
+  const isOwner=String(process.env.JARVIS_OWNER_ID||'797626962494488636')===String(message.author.id);
   if(!isOwner) return {handled:false};
-  const raw=String(prompt||'').replace(/^(?:(?:yo|hey|hi|ok|okay)\s+)?jarvis\b[,:!\s-]*/i,'').trim().replace(/^(?:yo\s+)?(?:get\s+everything\s+ready|everything\s+ready)[.!,:;\s-]*/i,'').trim();
+  const raw=String(prompt||'').replace(/^jarvis\b[,:!\s-]*/i,'').trim();
   if(!raw) return {handled:false};
-  // V20 LOCAL-FIRST ARCHITECTURE: deterministic allowlisted actions run without Gemini.
-  // Gemini is reserved for ambiguous, conversational, or genuinely multi-domain planning.
   const deterministicPlan=deterministicAgentPlan(raw);
-  if (deterministicPlan?.steps?.length) {
-    const validation=validatePlan(deterministicPlan,message.guild);
-    if (validation.ok && validation.plan?.steps?.length) {
-      const simulation=/^(?:preview|simulate|dry run|dry-run)\b/i.test(raw);
-      if (!simulation && (validation.plan.needsConfirmation || validation.plan.steps.some(s=>risk.level(s)>=3)) && !confirmed) {
-        const preview=summarizePlan(validation.plan,validation.details);
-        const token=Buffer.from(JSON.stringify({plan:validation.plan,createdAt:Date.now()})).toString('base64url');
-        config.v11??={}; config.v11.pendingPlans??={}; config.v11.pendingPlans[`${message.guild.id}:${message.author.id}`]={token,plan:validation.plan,expiresAt:Date.now()+60000}; saveConfig(message.guild.id,config);
-        return {handled:true,text:`**JARVIS V20 PLAN**\n${validation.plan.summary||'I have prepared the requested operations.'}\n\n${preview}\n\nReply **yes** to execute, or **no** to cancel.`};
-      }
-      if (simulation && !confirmed) return executePlan({message,plan:validation.plan,config,saveConfig,dryRun:true});
-      if (confirmed) {
-        const key=`${message.guild.id}:${message.author.id}`; const pending=config.v11?.pendingPlans?.[key];
-        if (!pending || pending.expiresAt<Date.now()) return {handled:true,text:'That plan has expired, sir. Please give the command again.'};
-        config.v11.pendingPlans[key]=null;
-      }
-      const pcOnly=validation.plan.steps.every(step=>String(step.action||'').startsWith('pc_'));
-      if(!pcOnly && !config.v12?.snapshots?.disabled) await snapshots.create(message.guild,config,saveConfig,{reason:validation.plan.summary||'Before JARVIS V20 plan'});
-      const result=await executePlan({message,plan:validation.plan,config,saveConfig});
-      saveConfig(message.guild.id,config);
-      return result;
-    }
-  }
-
-  // Only now do we spend an AI request. Keep the prompt small by retrieving
-  // relevant local-vault notes instead of dumping the whole memory store.
-  const session=getSession(config,message.guild.id,message.author.id)||[];
-  const recentContext=session.slice(-6).map(x=>`${x.role==='model'?'JARVIS':'USER'}: ${String(x.text||'').slice(0,400)}`).join('\n');
-  const live=await awareness.snapshot(message.guild).catch(()=>null);
-  const liveContext=live?`LIVE SERVER CONTEXT (reference only; do not invent beyond this):\n${awareness.format(live)}`:'';
-  const knowledge=serverKnowledge.context(config,message.guild.id);
-  const vaultContext=localVault.contextFor(raw,{maxResults:4,maxChars:9000});
-  let pcContext='';
-  if(pcBridge.status().connected && /\b(?:pc|computer|system|screen|window|running|open|launch|start|run|play|browser|youtube|gmail|tiktok|spotify|steam|minecraft|rocket league|volume|network|internet)\b/i.test(raw)){
-    try { const state=await pcBridge.execute('pc_state',{action:'pc_state'},8000); pcContext=`LIVE PC CONTEXT (read-only; may be unavailable or slightly stale):\n${JSON.stringify(state?.details||state).slice(0,5000)}`; }
-    catch(e){ pcContext='LIVE PC CONTEXT: unavailable'; }
-  }
-  const plannerPrompt=[liveContext,knowledge,vaultContext,pcContext,recentContext?`RECENT CONVERSATION CONTEXT:\n${recentContext}`:'',`CURRENT REQUEST:\n${raw}`].filter(Boolean).join('\n\n');
-  let rawPlan=null;
-  try { rawPlan=await parseAgentPlan({message,prompt:plannerPrompt}); } catch(e) { console.warn('[V20 AI ESCALATION]',e?.message||e); }
-  // The AI planner is primary, but for PC intent we also reconcile its plan
-  // against a deterministic intent pass. This prevents a valid natural-language
-  // request such as "run Spotify and Rocket League" from being reduced to only
-  // one action when the model under-plans it. Deterministic actions are only
-  // dedicated, allowlisted PC actions and are merged without duplicates.
-  if(deterministicPlan?.steps?.length) {
-    const pcActions=new Set(['pc_open_app','pc_open_url','pc_browser_search','pc_spotify_play','pc_spotify_control','pc_close_app','pc_volume','pc_processes','pc_system_status','pc_active_window','pc_network_status','pc_state']);
-    if(!rawPlan) rawPlan=deterministicPlan;
-    else if(rawPlan.steps?.length) {
-      const key=(x)=>`${String(x.action).toLowerCase()}|${String(x.name||'').trim().toLowerCase()}`;
-      const rawIsPurePC=rawPlan.steps.every(x=>pcActions.has(String(x.action).toLowerCase()));
-      if(rawIsPurePC) {
-        // For a pure desktop request, the deterministic pass is the canonical
-        // ordering. The model may omit one of several requested apps; using the
-        // deterministic sequence prevents "A and B" becoming only A or B.
-        rawPlan={...deterministicPlan,summary:rawPlan.summary||deterministicPlan.summary};
-      } else {
-        const merged=[...rawPlan.steps];
-        for(const ds of deterministicPlan.steps) {
-          if(!pcActions.has(ds.action)) continue;
-          const k=key(ds);
-          if(!merged.some(ms=>key(ms)===k)) merged.push(ds);
-        }
-        rawPlan={...rawPlan,steps:merged.slice(0,MAX_STEPS),summary:rawPlan.summary||deterministicPlan.summary};
-      }
-    }
-  }
-  if(rawPlan?.steps?.length===1&&rawPlan.steps[0].action==='undo'){const entry=journal.latest(config,e=>e.reversible&&e.status==='SUCCESS');if(!entry)return{handled:true,text:'I could not find a recent reversible JARVIS action, sir.'};const result=await undo({message,entry,config,saveConfig});return{handled:true,text:result.text};}
+  if(deterministicPlan?.steps?.length===1&&deterministicPlan.steps[0].action==='undo'){const entry=journal.latest(config,e=>e.reversible&&e.status==='SUCCESS');if(!entry)return{handled:true,text:'I could not find a recent reversible JARVIS action, sir.'};const result=await undo({message,entry,config,saveConfig});return{handled:true,text:result.text};}
+  const session=getSession(config,message.guild.id,message.author.id)||[]; const recentContext=session.slice(-10).map(x=>`${x.role==='model'?'JARVIS':'USER'}: ${String(x.text||'').slice(0,500)}`).join('\n'); const live=await awareness.snapshot(message.guild).catch(()=>null); const liveContext=live?`LIVE SERVER CONTEXT (reference only; do not invent beyond this):\n${awareness.format(live)}`:''; const knowledge=serverKnowledge.context(config,message.guild.id); const plannerPrompt=[liveContext,knowledge,recentContext?`RECENT CONVERSATION CONTEXT:\n${recentContext}`:'',`CURRENT REQUEST:\n${raw}`].filter(Boolean).join('\n\n'); const rawPlan=deterministicPlan||await parseAgentPlan({message,prompt:plannerPrompt});
 
   // Planner failure is NOT a failed user request. A null plan means the AI
   // planner could not classify the message as an executable Discord action
@@ -589,8 +304,8 @@ async function runAgent({message,prompt,config,saveConfig,confirmed=false}) {
 async function confirmPending({message,text,config,saveConfig}) {
   const key=`${message.guild.id}:${message.author.id}`; const pending=config.v11?.pendingPlans?.[key]; if(!pending) return null;
   if(Date.now()>pending.expiresAt){config.v11.pendingPlans[key]=null;saveConfig(message.guild.id,config);return {handled:true,text:'The pending plan expired, sir.'};}
-  if(/^(?:no|n|cancel|stop|abort)$/i.test(String(text||'').trim())){config.v11.pendingPlans[key]=null;saveConfig(message.guild.id,config);return {handled:true,text:'Cancelled. No changes were made.'};}
-  if(/^(?:yes|y|confirm|confirmed|do it|proceed|go ahead|execute)$/i.test(String(text||'').trim())){config.v11.pendingPlans[key]=null;saveConfig(message.guild.id,config);if(!config.v12?.snapshots?.disabled) await snapshots.create(message.guild,config,saveConfig,{reason:pending.plan.summary||'Before confirmed JARVIS plan'});return executePlan({message,plan:pending.plan,config,saveConfig});}
+  if(/^no|cancel/i.test(text)){config.v11.pendingPlans[key]=null;saveConfig(message.guild.id,config);return {handled:true,text:'Cancelled. No changes were made.'};}
+  if(/^yes|confirm|do it/i.test(text)){config.v11.pendingPlans[key]=null;saveConfig(message.guild.id,config);if(!config.v12?.snapshots?.disabled) await snapshots.create(message.guild,config,saveConfig,{reason:pending.plan.summary||'Before confirmed JARVIS plan'});return executePlan({message,plan:pending.plan,config,saveConfig});}
   return null;
 }
 module.exports={runAgent,confirmPending,cleanPlan,executePlan,deterministicAgentPlan};

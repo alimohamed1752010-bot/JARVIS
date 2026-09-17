@@ -7,7 +7,6 @@ const journal=require('./journal');
 const awareness=require('./awareness');
 const simulator=require('./simulator');
 const {createDefaultRegistry}=require('./toolRegistry');
-const {creatorAnswer}=require('./identity');
 const toolRegistry=createDefaultRegistry();
 
 const ACTION_WORDS=/\b(move|drag|send|disconnect|dc|pull|deafen|undeafen|mute|unmute|timeout|untimeout|kick|ban|warn|simulate|undo|history|diagnostics|status|who|everyone|except|role|roles|permission|permissions|soundboard|server|channel|nickname|rename|give|remove|add)\b/i;
@@ -76,7 +75,7 @@ async function route({message,text,config,saveConfig}){
 
 async function perform({message,intent,config,saveConfig,confirmed=false}){
   if(['unknown',''].includes(normalizeAction(intent.action)))return {handled:false};
-  if(intent.action==='jarvis_identity'){return {handled:true,text:creatorAnswer()};}
+  if(intent.action==='jarvis_identity'){return {handled:true,text:'I am JARVIS, sir, your Discord AI assistant. I was built for this server to handle commands, moderation, automation, and general assistance.'};}
   if(intent.action==='whoami'){
     const member=message.member || await message.guild.members.fetch(message.author.id).catch(()=>null);
     if(!member) return {handled:true,text:'I could not retrieve your server profile, sir.'};

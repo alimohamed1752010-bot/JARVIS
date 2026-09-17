@@ -22,55 +22,6 @@ const {
 // JARVIS — ADMIN ONLY EDITION
 // ============================================================
 
-if (String(process.env.DASHBOARD_ENABLED||'false').toLowerCase() !== 'true') {
-  const http = require('node:http');
-  const bridgeServer = http.createServer(async (req,res)=>{
-    if (req.method === 'POST' && req.url === '/voice') {
-      try {
-        const expected=String(process.env.PC_AGENT_TOKEN||'').trim();
-        const supplied=String(req.headers['x-jarvis-voice-token']||'').trim();
-        if (!expected || supplied !== expected) { res.writeHead(401,{'Content-Type':'application/json'}); res.end(JSON.stringify({ok:false,error:'Unauthorized'})); return; }
-        let body=''; req.setEncoding('utf8');
-        for await (const chunk of req) { body += chunk; if(body.length>20000) throw new Error('Request too large.'); }
-        const data=JSON.parse(body||'{}');
-        const guildId=String(data.guildId||'').trim(); const userId=String(data.userId||'').trim(); const text=String(data.text||'').trim();
-        if(!guildId || !userId || !text) throw new Error('guildId, userId and text are required.');
-        const guild=client.guilds.cache.get(guildId); if(!guild) throw new Error('Configured voice guild is not available.');
-        const member=await guild.members.fetch(userId).catch(()=>null); if(!member) throw new Error('Configured voice user is not in the guild.');
-        const cfg=getConfig(guild.id);
-        const fakeChannel={id:'VOICE_SESSION',name:'voice-session',isTextBased:()=>true,send:async()=>null};
-        const message={guild,author:{id:userId,tag:member.user?.tag||member.user?.username||userId},member,channel:fakeChannel,mentions:{channels:{first:()=>null}},reply:async()=>null};
-        const agent=require('./core/agent');
-        const pendingResult=await agent.confirmPending({message,text,config:cfg,saveConfig}).catch(()=>null);
-        const result=pendingResult || await agent.runAgent({message,prompt:text,config:cfg,saveConfig,confirmed:false});
-        let responseText=String(result?.text||'').trim();
-        let handled=Boolean(result?.handled);
-        // Voice must behave like an actual JARVIS invocation, not like the thin
-        // action planner. If the planner intentionally declines a request, use
-        // the normal conversational brain instead of returning an empty payload.
-        if(!responseText && !handled){
-          try {
-            const { conversationalReply } = require('./ai');
-            responseText=String(await conversationalReply({
-              message, config:cfg, saveConfig, prompt:text,
-              mode:cfg.ai?.personality||'classic', skipMemory:false,
-              context:`Voice invocation for the owner in server ${guild.name}. Answer naturally if this is not an executable PC/Discord action.`
-            })||'').trim();
-            handled=Boolean(responseText);
-          } catch(e) {
-            console.error('[VOICE BRIDGE AI]',e?.message||e);
-          }
-        }
-        if(!responseText) responseText=handled ? 'The request was handled, but JARVIS returned no text.' : 'I did not receive a response from JARVIS.';
-        res.writeHead(200,{'Content-Type':'application/json'}); res.end(JSON.stringify({ok:true,handled,text:responseText,speechText:responseText}));
-      } catch(e) { res.writeHead(400,{'Content-Type':'application/json'}); res.end(JSON.stringify({ok:false,error:String(e?.message||e)})); }
-      return;
-    }
-    res.writeHead(200,{'Content-Type':'text/plain'});res.end('JARVIS PC Bridge ONLINE');
-  });
-  bridgeServer.listen(Number(process.env.PORT||3000),()=>pcBridge.start(bridgeServer));
-}
-
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -116,8 +67,6 @@ const { start: startV9Awareness } = require("./systems/eventAwareness");
 const { start: startAutopilot } = require("./systems/autopilot");
 const serverKnowledge = require('./core/serverKnowledge');
 const superior = require('./systems/superior');
-const { creatorAnswer, creatorFacts, CREATOR_ID } = require('./core/identity');
-const pcBridge = require('./core/pcBridge');
 
 // ============================================================
 // AI DIAGNOSTICS
@@ -617,7 +566,8 @@ function getAdminIds() {
 }
 
 function isOwner(message) {
-  return Boolean(CREATOR_ID && message?.author?.id === CREATOR_ID);
+  const ownerId = String(process.env.JARVIS_OWNER_ID || "797626962494488636").trim();
+  return Boolean(ownerId && message?.author?.id === ownerId);
 }
 
 function isConfiguredAdmin(message) {
@@ -626,7 +576,7 @@ function isConfiguredAdmin(message) {
 }
 
 function getOwnerId() {
-  return CREATOR_ID;
+  return String(process.env.JARVIS_OWNER_ID || "797626962494488636").trim();
 }
 
 const NON_OWNER_COMEBACKS = [
@@ -4302,7 +4252,7 @@ const autoReplies = [
       t.includes("who built you"),
 
     reply: () =>
-      creatorAnswer()
+      "I was built for this server, sir."
   },
 
   {
@@ -4512,7 +4462,7 @@ client.once(
     });
     startV9Awareness(client,{getConfig,saveConfig,logEvent});
     startAutopilot(client,{getConfig,logEvent,recordKnowledge:(guildId,anomaly)=>{ try { const cfg=getConfig(guildId); serverKnowledge.recordAnomaly(cfg,guildId,anomaly); saveConfig(guildId,cfg); } catch {} }});
-    startDashboard(client,getConfig,getAnalytics,getAIStatus,voice.status(),server=>pcBridge.start(server));
+    startDashboard(client,getConfig,getAnalytics,getAIStatus,voice.status());
 
     bot.user.setPresence({
       activities: [
@@ -4711,9 +4661,18 @@ client.on(
         try {
           await message.channel.sendTyping().catch(() => {});
 
-          // AI-FIRST: a direct reply is routed through the same AI planner and
-          // conversational brain as every other JARVIS request. Deterministic
-          // handlers (including math) are fallback-only.
+          // Deterministic calculator must run before the AI/agent pipeline.
+          // A reply to JARVIS is already an invocation, so a simple question
+          // such as "how about 6x6x6" must be answered as math rather than
+          // being interpreted as a conversational/cube-related request.
+          const directReplyMath = safeMath(rawContent);
+          if (directReplyMath !== null) {
+            const mathReply = `**${directReplyMath}, sir.**`;
+            await message.reply(mathReply);
+            rememberDirectReplyTurn(message, rawContent, mathReply);
+            return;
+          }
+
           // A direct reply behaves like a normal owner JARVIS request, but
           // without requiring the word "jarvis". The V11 agent gets first
           // chance so natural-language server actions work exactly like
@@ -4762,17 +4721,6 @@ client.on(
 
           if (reply) {
             await message.reply(reply.slice(0, 1900));
-            return;
-          }
-
-          // Last-resort legacy calculator fallback. AI has already had the
-          // opportunity to understand the request.
-          const directReplyMath = safeMath(rawContent);
-          if (directReplyMath !== null) {
-            const mathReply = `**${directReplyMath}, sir.**`;
-            await message.reply(mathReply);
-            rememberDirectReplyTurn(message, rawContent, mathReply);
-            return;
           }
         } catch (error) {
           console.error('[V14.5.7 SERVER REPLY TRIGGER]', error);
@@ -4810,82 +4758,6 @@ client.on(
       return;
     }
 
-    // ========================================================
-    // V15.1 AI-FIRST UNIVERSAL ROUTER
-    // Every invocation reaches the AI planner before legacy commands,
-    // greetings, calculator shortcuts, roast handlers, or regex parsers.
-    // If AI cannot produce an executable Discord plan, the existing systems
-    // remain available as fallbacks below.
-    // ========================================================
-    const universalPrompt = rawContent.replace(/\bjarvis\b/ig, '').trim();
-    let aiFirstHandled = false;
-    if (universalPrompt) {
-      // Confirmation replies are NOT new AI questions. They must be consumed
-      // before the planner/conversation pipeline, otherwise `yes` gets treated
-      // as a fresh conversational message and the pending Discord action is
-      // lost. V11 confirmations therefore have absolute priority here.
-      try {
-        const confirmed = await confirmV11Plan({message, text:universalPrompt, config, saveConfig});
-        if (confirmed?.handled) {
-          await message.reply(confirmed.text || 'Done, sir.');
-          rememberDirectReplyTurn(message, universalPrompt, confirmed.text || 'Done, sir.');
-          return;
-        }
-      } catch (error) {
-        console.error('[V20 CONFIRMATION ROUTER]', error);
-      }
-
-      // Preserve the older V9 confirmation store as a second safety net for
-      // legacy commands that still create commandEngine confirmations.
-      if (/^(?:yes|y|confirm|confirmed|do it|proceed|go ahead|execute|no|n|cancel|stop|abort)$/i.test(universalPrompt)) {
-        try {
-          const legacy = await routeV9Command({message, text:universalPrompt, config, saveConfig});
-          if (legacy?.handled) {
-            await message.reply(legacy.text || 'Done, sir.');
-            rememberDirectReplyTurn(message, universalPrompt, legacy.text || 'Done, sir.');
-            return;
-          }
-        } catch (error) {
-          console.error('[V20 LEGACY CONFIRMATION ROUTER]', error);
-        }
-      }
-
-      try {
-        const agent = await runAgent({message, prompt:universalPrompt, config, saveConfig});
-        if (agent?.handled) {
-          aiFirstHandled = true;
-          const agentReply = agent.text || 'Done, sir.';
-          await message.reply(agentReply);
-          // Action results are conversation turns too. Keep them in the same
-          // memory/session path so follow-ups such as "do that again",
-          // "what did you just change?", and target corrections retain context.
-          rememberDirectReplyTurn(message, universalPrompt, agentReply);
-          return;
-        }
-      } catch (error) {
-        console.error('[V15.1 AI-FIRST AGENT]', error);
-      }
-    }
-
-    // If the planner correctly decided this is conversation rather than a
-    // Discord action, let the conversational AI answer BEFORE any hardcoded
-    // response. Legacy command/greeting systems only get used when AI cannot
-    // answer or when an exact legacy command is being invoked.
-    const legacyCommandName = universalPrompt.split(/\s+/)[0]?.toLowerCase();
-    const hasLegacyCommand = Boolean(legacyCommandName && textCommands[legacyCommandName]);
-    if (!aiFirstHandled && universalPrompt && !hasLegacyCommand) {
-      try {
-        const aiReply = await conversationalReply({
-          message, config, saveConfig, prompt:universalPrompt,
-          mode:config.ai?.personality || 'classic',
-          context:`AI-FIRST JARVIS ROUTER. Understand the user's request before answering. If it is informational, conversational, emotional, creative, or a general question, answer it naturally. If it requires a Discord server action, it should have been handled by the AI action planner already. Live Discord context: server=${message.guild.name}; members=${message.guild.memberCount}; channel=#${message.channel.name}.`
-        });
-        if (aiReply) { await message.reply({content:aiReply.slice(0,1900)}); return; }
-      } catch (error) {
-        console.error('[V15.1 AI-FIRST CONVERSATION]', error);
-      }
-    }
-
     // V10: text is the only input. If TTS is connected, every JARVIS text reply is also spoken.
     const activeVoiceConnection = voice.getConnection(message.guild.id) || message.guild.__jarvisVoiceConnection;
     if (activeVoiceConnection && voice.status(message.guild.id).ttsEnabled) {
@@ -4901,8 +4773,23 @@ client.on(
       };
     }
 
-    // V11 agent already ran in the universal AI-first router above.
-    // The legacy V9 router remains below as an emergency fallback.
+    // ========================================================
+    // V11 SUPERIOR AGENT ENGINE
+    // Natural-language planning + safe Discord tools + verification.
+    // ========================================================
+    if (lower.startsWith("jarvis")) {
+      const v11Input = rawContent.slice(6).trim();
+      if (v11Input) {
+        try {
+          const confirmed = await confirmV11Plan({message,text:v11Input,config,saveConfig});
+          if (confirmed?.handled) { await message.reply(confirmed.text || "Done, sir."); return; }
+          const agent = await runAgent({message,prompt:v11Input,config,saveConfig});
+          if (agent?.handled) { await message.reply(agent.text || "Done, sir."); return; }
+        } catch (error) {
+          console.error("[V11 AGENT]", error);
+        }
+      }
+    }
 
     // ========================================================
     // V9 INTELLIGENT COMMAND ROUTER

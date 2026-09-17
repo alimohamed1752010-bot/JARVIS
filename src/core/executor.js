@@ -4,12 +4,12 @@ const {resolveMember}=require('./resolver');
 const {check}=require('./permissions');
 const journal=require('./journal');
 
-async function execute({message,action,target,destination,reason='',durationMs=10*60*1000,config,saveConfig,dryRun=false,skipJournal=false,role='',permissionChanges=[],targets=[],channel='',name='',color='',hoist=null,mentionable=null}){
+async function execute({message,action,target,destination,reason='',durationMs=10*60*1000,config,saveConfig,dryRun=false,skipJournal=false,role='',permissionChanges=[],targets=[],channel='',name=''}){
   const guild=message.guild; const actor=message.member; const bot=guild.members.me;
   const perm=check({guild,actor,bot,action,target});
   if(!perm.ok)return {ok:false,text:perm.message,code:perm.code};
   if(!actor?.permissions?.has(PermissionsBitField.Flags.Administrator) && actor?.id !== guild.ownerId) return {ok:false,text:'Only the server owner or an administrator may direct JARVIS to change server configuration.',code:'ACTOR_PERMISSION'};
-  if(['role_permissions','role_edit','role_add','role_remove','channel_edit'].includes(action)){
+  if(['role_permissions','role_add','role_remove','channel_edit'].includes(action)){
     if(!bot?.permissions?.has(action==='channel_edit'?PermissionsBitField.Flags.ManageChannels:PermissionsBitField.Flags.ManageRoles)) return {ok:false,text:`I need **${action==='channel_edit'?'Manage Channels':'Manage Roles'}** permission for that operation.`,code:'BOT_PERMISSION'};
     if(action==='channel_edit'){
       const resolved=resolveChannelAny(guild,channel); if(resolved.status==='ambiguous')return {ok:false,text:`I found multiple channels matching **${channel}**.`,code:'AMBIGUOUS_CHANNEL'}; if(!resolved.channel)return {ok:false,text:`I couldn't find channel **${channel}**.`,code:'MISSING_CHANNEL'};
@@ -20,23 +20,6 @@ async function execute({message,action,target,destination,reason='',durationMs=1
     const targetRole=rr.role;
     if(targetRole.managed)return {ok:false,text:`**${targetRole.name}** is managed by an integration and cannot be edited by JARVIS.`,code:'MANAGED_ROLE'};
     if(targetRole.position>=bot.roles.highest.position)return {ok:false,text:`**${targetRole.name}** is at or above my highest role, so Discord will not let me manage it.`,code:'ROLE_HIERARCHY'};
-    if(action==='role_edit'){
-      if(!message.guild.members.me?.permissions?.has(PermissionsBitField.Flags.ManageRoles)) return {ok:false,text:'I need **Manage Roles** permission for that operation.',code:'BOT_PERMISSION'};
-      const before={name:targetRole.name,color:targetRole.hexColor,hoist:targetRole.hoist,mentionable:targetRole.mentionable,permissions:targetRole.permissions.bitfield.toString()};
-      const opts={reason:`JARVIS AI: ${reason||'Owner-directed role edit'}`};
-      if(name) opts.name=String(name).slice(0,100);
-      if(color){ const c=String(color).trim(); if(!/^#?[0-9a-f]{6}$/i.test(c)) return {ok:false,text:`Invalid role color **${color}**. Use a hex color such as #00ff88.`,code:'INVALID_COLOR'}; opts.color=c.replace(/^#/,''); }
-      if(typeof hoist==='boolean') opts.hoist=hoist;
-      if(typeof mentionable==='boolean') opts.mentionable=mentionable;
-      // permissionChanges are intentionally handled here too, so one AI step can edit
-      // the role's appearance and permissions atomically from the user's perspective.
-      if(permissionChanges?.length){ const next=new PermissionsBitField(targetRole.permissions.bitfield); for(const change of permissionChanges){const flag=normalizePermission(change.permission);if(!flag)return {ok:false,text:`I don't recognize the permission **${change.permission}**.`,code:'UNKNOWN_PERMISSION'}; change.enabled?next.add(flag):next.remove(flag);} opts.permissions=next; }
-      if(dryRun) return {ok:true,simulated:true,text:`Would edit role **${targetRole.name}**${name?` → **${name}**`:''}${color?` to **${color}**`:''}${permissionChanges?.length?` and change ${permissionChanges.length} permission(s)`:''}.`};
-      const edited=await targetRole.edit(opts);
-      const entry=journal.record(config,{action:'ROLE_EDIT',actorId:message.author.id,targetId:edited.id,reason,before,after:{name:edited.name,color:edited.hexColor,hoist:edited.hoist,mentionable:edited.mentionable,permissions:edited.permissions.bitfield.toString()},reversible:false});
-      saveConfig(guild.id,config);
-      return {ok:true,text:`Edited role **${edited.name}**${edited.hexColor!=='#000000'?` (${edited.hexColor})`:''}.`,roleId:edited.id,case:entry};
-    }
     if(action==='role_permissions'){
       const changes=Array.isArray(permissionChanges)?permissionChanges:[]; if(!changes.length)return {ok:false,text:'No permission changes were specified.',code:'NO_CHANGES'};
       const next=new PermissionsBitField(targetRole.permissions.bitfield);

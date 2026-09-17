@@ -1,22 +1,19 @@
 {
   "name": "jarvis-discord-bot",
-  "version": "20.8.0",
-  "description": "JARVIS V20.8 - reliable Discord action confirmations + local voice interruption safety",
+  "version": "15.0.0",
+  "description": "JARVIS V14.5 Superior Relationship Intelligence & Autonomous Server Reasoning",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "deploy": "node src/deploy-commands.js",
-    "test": "node --test test/*.test.js",
-    "voice": "node src/pc-agent/voice.js",
-    "pc": "node src/pc-agent/index.js"
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "@discordjs/voice": "^0.19.2",
-    "@google/genai": "2.18.0",
     "discord.js": "^14.24.2",
     "dotenv": "^17.2.1",
-    "ffmpeg-static": "^5.2.0",
-    "ws": "^8.18.3"
+    "@google/genai": "2.18.0",
+    "@discordjs/voice": "^0.19.2",
+    "ffmpeg-static": "^5.2.0"
   },
   "engines": {
     "node": ">=22.12.0"

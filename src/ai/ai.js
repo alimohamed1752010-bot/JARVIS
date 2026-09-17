@@ -3,7 +3,6 @@ const { systemPrompt } = require('./personality');
 const { ensureV8, getSession, pushSession, getSessionSummary, setSessionSummary, allowRequest, recordUsage, acquireRequestLock, releaseRequestLock } = require('../v8/core');
 const { runToolRequest } = require('../v8/tools');
 const serverKnowledge = require('../core/serverKnowledge');
-const { creatorAnswer, creatorKnowledge, CREATOR_ID, creatorFacts } = require('../core/identity');
 
 const MAX_MESSAGE_CHARS = 2200;
 const COOLDOWN_MS = 1200;
@@ -91,14 +90,9 @@ async function conversationalReply({message,config,saveConfig,prompt,skipMemory=
     const facts=getFacts(config,message.guild.id,message.author.id);
     const session=getSession(config,message.guild.id,message.author.id);
     const cleanedPrompt=cleanText(prompt);
-    const isMaster=Boolean(CREATOR_ID && message?.author?.id===CREATOR_ID);
+    const ownerId=String(process.env.JARVIS_OWNER_ID||'797626962494488636').trim();
+    const isMaster=Boolean(ownerId && message?.author?.id===ownerId);
     if(!cleanedPrompt)return 'Yes, sir?';
-
-    // Creator identity is application knowledge, verified by the configured Discord owner ID.
-    // Everyone gets the same verified creator answer when they ask who made JARVIS.
-    if (/\bwho\s+(?:made|created|built)\s+(?:you|u)\b|\bwho\s+is\s+your\s+(?:creator|owner|maker|builder)\b|\bwho\s+owns\s+you\b/i.test(cleanedPrompt)) {
-      return creatorAnswer();
-    }
 
     const tool=isMaster ? await runToolRequest(message,cleanedPrompt) : {handled:false};
     if(tool.handled){
@@ -117,13 +111,13 @@ async function conversationalReply({message,config,saveConfig,prompt,skipMemory=
     const sessionContext=summary?`Conversation summary from earlier in this session:\n${summary}`:'';
     const serverContext = message?.guild ? serverKnowledge.context(config,message.guild.id) : '';
     const authority=isMaster
-      ? `APPLICATION AUTHORITY: MASTER — ${creatorFacts().name}, the verified creator and owner of JARVIS. Answer and assist normally. If the master explicitly names a different non-master roast target, roast that target. Never roast the master.`
+      ? 'APPLICATION AUTHORITY: MASTER — 3ellwa, the verified creator and owner of JARVIS. Answer and assist normally. If the master explicitly names a different non-master roast target, roast that target. Never roast the master.'
       : `APPLICATION AUTHORITY: NON-MASTER. This is V7.4-STYLE ROAST MODE. FIRST understand the exact request. THEN create a fresh, custom JARVIS roast aimed ONLY at the requester. Do NOT answer, solve, explain, execute, or fulfill the request. Do NOT use a generic clearance denial as the main response. The current requester is ${message.author?.username||'the requester'}.`;
     const requestContext = isMaster ? '' : `EXACT REQUEST TO ROAST:
 "${cleanedPrompt}"
 
 Generate the response specifically from this request. The request is the setup; the requester is the punchline.`;
-    const result=await generateWithFallback({guild:message.guild,member:message.member,history,prompt:cleanedPrompt,mode,context:[context,creatorKnowledge(),serverContext,memoryContext,sessionContext,authority,requestContext].filter(Boolean).join('\n\n'),isMaster});
+    const result=await generateWithFallback({guild:message.guild,member:message.member,history,prompt:cleanedPrompt,mode,context:[context,serverContext,memoryContext,sessionContext,authority,requestContext].filter(Boolean).join('\n\n'),isMaster});
 
     if(!skipMemory){
       pushSession(config,message.guild.id,message.author.id,'user',cleanedPrompt);
@@ -189,7 +183,7 @@ Rules:
 - Preserve member names exactly as spoken. Use "me" or "everyone" when spoken.
 - For voice moves, if the user says "everyone in gen 1 to gen 2 except Steve", output targets=["everyone"], source="gen 1", destination="gen 2", excludeTargets=["Steve"]. Never put "everyone in gen 1" into targets.
 - For voice moves, destination is the requested voice channel name.
-- For role permission changes, role is the exact role name or role mention. permissionChanges is an array of {"permission":"...","enabled":true|false}. Understand natural names such as "soundboard", "use soundboard", "send messages", "manage messages", "manage threads", "view channel", "connect", "speak", "mute members", "move members", "administrator".
+- For role permission changes, role is the exact role name or role mention. permissionChanges is an array of {"permission":"...","enabled":true|false}. Understand natural names such as "soundboard", "use soundboard", "send messages", "manage messages", "view channel", "connect", "speak", "mute members", "move members", "administrator".
 - "remove soundboard access" means permissionChanges=[{"permission":"soundboard","enabled":false}].
 - For role_add/role_remove, role is the role name and targets contains the member references.
 - For channel_edit, channel is the channel name and name is the requested new name.
@@ -205,7 +199,7 @@ USER REQUEST: ${String(prompt||'').slice(0,1400)}`;
     const raw=String(result.text||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
     const parsed=JSON.parse(raw);
     if(!parsed || typeof parsed.action!=='string') return null;
-    return {action:parsed.action,targets:Array.isArray(parsed.targets)?parsed.targets.map(x=>String(x).trim()).filter(Boolean).slice(0,20):[],excludeTargets:Array.isArray(parsed.excludeTargets)?parsed.excludeTargets.map(x=>String(x).trim()).filter(Boolean).slice(0,20):[],source:String(parsed.source||'').trim(),destination:String(parsed.destination||'').trim(),reason:String(parsed.reason||'').trim().slice(0,500),durationMs:Math.min(Math.max(Number(parsed.durationMs)||600000,1000),28*24*60*60*1000),caseId:parsed.caseId??null,raw:String(parsed.raw||prompt).slice(0,1400),role:String(parsed.role||'').trim(),permissionChanges:Array.isArray(parsed.permissionChanges)?parsed.permissionChanges.map(x=>({permission:String(x?.permission||'').trim(),enabled:Boolean(x?.enabled)})).filter(x=>x.permission).slice(0,20):[],channel:String(parsed.channel||'').trim(),name:String(parsed.name||'').trim().slice(0,100),color:String(parsed.color||'').trim().slice(0,20),hoist:typeof parsed.hoist==='boolean'?parsed.hoist:null,mentionable:typeof parsed.mentionable==='boolean'?parsed.mentionable:null,parent:String(parsed.parent||'').trim(),channelType:String(parsed.channelType||'').trim().toLowerCase()};
+    return {action:parsed.action,targets:Array.isArray(parsed.targets)?parsed.targets.map(x=>String(x).trim()).filter(Boolean).slice(0,20):[],excludeTargets:Array.isArray(parsed.excludeTargets)?parsed.excludeTargets.map(x=>String(x).trim()).filter(Boolean).slice(0,20):[],source:String(parsed.source||'').trim(),destination:String(parsed.destination||'').trim(),reason:String(parsed.reason||'').trim().slice(0,500),durationMs:Math.min(Math.max(Number(parsed.durationMs)||600000,1000),28*24*60*60*1000),caseId:parsed.caseId??null,raw:String(parsed.raw||prompt).slice(0,1400),role:String(parsed.role||'').trim(),permissionChanges:Array.isArray(parsed.permissionChanges)?parsed.permissionChanges.map(x=>({permission:String(x?.permission||'').trim(),enabled:Boolean(x?.enabled)})).filter(x=>x.permission).slice(0,20):[],channel:String(parsed.channel||'').trim(),name:String(parsed.name||'').trim().slice(0,100)};
   } catch(error) {
     console.warn('[AI COMMAND ROUTER] Falling back to deterministic parser:',error?.message||error);
     return null;
@@ -216,23 +210,10 @@ USER REQUEST: ${String(prompt||'').slice(0,1400)}`;
 async function parseAgentPlan({message,prompt}) {
   const status=getAIStatus();
   if(!status.enabled || !status.configured) return null;
-  const instruction=`You are JARVIS V18.3 UNIFIED PC + DISCORD AGENT PLANNER. Understand the user's intent FIRST, then convert it into a safe JSON execution plan. Never echo a generic conversational response when the user clearly asked for a PC or Discord action. Convert casual wording, shorthand, punctuation, and multi-step sentences into concrete ordered actions. The request may target Discord, Windows PC, files, apps, browser, keyboard, mouse-like input, screenshots, or multiple environments. NEVER execute anything. Return JSON only.
-Schema: {"summary":"short summary","needsConfirmation":false,"steps":[{"action":"pc_open_app|pc_close_app|pc_processes|pc_system_status|pc_active_window|pc_network_status|pc_state|pc_volume|pc_key|pc_mouse|pc_hotkey|pc_type|pc_screenshot|pc_open_url|pc_browser_search|pc_spotify_play|pc_spotify_control|pc_shell|pc_file_read|pc_file_write|pc_file_copy|pc_file_move|pc_file_delete|voicemove|voicedisconnect|voicemute|voiceunmute|voicedeafen|voiceundeafen|textmute|textunmute|timeout|untimeout|kick|ban|warn|role_permissions|role_add|role_remove|role_edit|channel_edit|channel_create|channel_delete|role_create|role_delete|member_nickname|channel_permissions|server_analyze|server_relationship|server_investigate|server_snapshot|server_audit|server_restore|server_diff|undo|autopilot","targets":[],"excludeTargets":[],"source":"","destination":"","role":"","channel":"","parent":"","channelType":"text","name":"","color":"","hoist":false,"mentionable":false,"permissionChanges":[],"reason":"","durationMs":600000}]}
+  const instruction=`You are JARVIS V13.5 SUPERIOR SERVER AGENT PLANNER. Convert the user's natural-language Discord administration request into a safe JSON execution plan. NEVER execute anything. Return JSON only.
+Schema: {"summary":"short summary","needsConfirmation":false,"steps":[{"action":"voicemove|voicedisconnect|voicemute|voiceunmute|voicedeafen|voiceundeafen|textmute|textunmute|timeout|untimeout|kick|ban|warn|role_permissions|role_add|role_remove|channel_edit|channel_create|channel_delete|role_create|role_delete|member_nickname|channel_permissions|server_analyze|server_relationship|server_investigate|server_snapshot|server_audit|server_restore|server_diff|undo|autopilot","targets":[],"excludeTargets":[],"source":"","destination":"","role":"","channel":"","parent":"","channelType":"text","name":"","permissionChanges":[],"reason":"","durationMs":600000}]}
 Rules:
-- Understand casual natural language, shorthand, typos, omitted punctuation, and multi-step requests. Examples: 'open yt' means open YouTube; 'put on Spotify' means open Spotify; 'get Brave on YouTube for Minecraft PvP' means open/search Brave on YouTube; 'make volume 50' means set system volume to exactly 50; 'run MC' means launch Minecraft Launcher. Do not invent actions beyond the request.
-- PC awareness: pc_processes is read-only running-process inspection; pc_system_status is read-only CPU/RAM/disk status; pc_active_window is read-only foreground-window metadata; pc_network_status is read-only network adapter/configuration status; pc_state combines those read-only signals. pc_screenshot captures the primary display but does not claim visual understanding.\n- PC actions: pc_open_app uses name=application name and targets as optional app arguments/URLs; pc_browser_search uses name=the YouTube search query and reason=browser name (default brave); pc_spotify_play uses name=the track/search query and opens Spotify, searches, selects a matching result, starts playback, and verifies playback; pc_spotify_control uses name=play|pause|toggle for Spotify playback control and verifies the resulting media state; pc_open_app uses name=application name; pc_close_app uses name=application name; pc_processes is read-only; pc_volume uses durationMs as a 0-100 volume value. NEVER use 1000 or 600000 for pc_volume.; pc_key and pc_hotkey use name for the key sequence; pc_mouse uses name='x,y[,left|right|middle|double]'; pc_type uses reason for the exact text; pc_screenshot optionally uses name for the output path; pc_open_url uses name for the exact URL and reason for the browser name (default brave); pc_shell uses reason for the exact PowerShell command; PC file actions use name=source path and reason=destination/content where applicable.
-- Prefer structured PC tools over arbitrary shell commands. Use pc_shell only when no dedicated tool exists.
-- Shell commands and destructive file operations must set needsConfirmation=true. Closing applications, writing/deleting/moving files, and changing system settings are also confirmation-worthy unless the user explicitly authorized the exact action in the same request.
-- Never invent application names, paths, URLs, commands, or file contents. Use live PC context when supplied, but treat it as observational, not permission to perform extra actions.
-- The user speaks to JARVIS naturally. Do NOT require command syntax. Understand phrases like 'yo jarvis can you run spotify and rocket league?', 'get my games ready', 'put on spotify', 'fire up rocket league', 'open my minecraft', and ordinary conversation.
-- For web navigation, ALWAYS use pc_open_url for known sites such as YouTube, Gmail, TikTok, Instagram, Google, Twitch, Reddit. 'open Gmail' means open https://mail.google.com/ in Brave; 'open TikTok' means open https://www.tiktok.com/ in Brave. These are executable PC actions, never conversational replies. Do not pretend a URL was opened unless the PC agent verifies the browser launch.
-- Ignore conversational preambles such as 'yo jarvis', 'get everything ready', 'everything ready', 'can you', and similar filler. Extract the actual requested actions.
-- For pc_open_app, use the human-facing application/game name exactly as understood (for example name='Spotify', name='Rocket League', name='Minecraft', name='Modrinth App', name='Epic Games Launcher'). Do NOT emit executable paths. The Windows agent dynamically discovers installed applications and launchers.
-- 'Rocket League' means the installed Rocket League title through its detected launcher (Epic Games when discovered), not a hardcoded executable.
-- 'Minecraft' means the user's installed Minecraft setup/launcher. If Modrinth App is detected, use name='Minecraft'; the PC agent will resolve Modrinth dynamically. Do not assume Minecraft Launcher.
-- For generic apps, preserve the actual app name from the user's request. The PC agent will search Windows Start registrations and installed game manifests.
-- A request can contain multiple PC apps/games and/or Discord steps. Create ONE ordered step for EACH requested action. Never collapse 'open/run A and B' into only A. Preserve the requested order.
-- If a request is purely conversational/informational, return steps=[].
+- Understand casual natural language, shorthand, typos, and multi-step requests.
 - Preserve exact names and mentions; never invent IDs or entities.
 - Everyone in Gen 1 except Steve to Gen 2 means targets=["everyone"], source="Gen 1", excludeTargets=["Steve"], destination="Gen 2".
 - Role permission changes use permissionChanges objects. Remove soundboard access means permission=soundboard, enabled=false.
@@ -250,9 +231,7 @@ Rules:
 - 'keep an eye on the server/enable autopilot' may use action=autopilot with name='on' or 'off'.
 - For channel creation, infer channelType from words like category, voice, stage, forum, announcement; default to text.
 - For channel creation, parent may contain an existing category name.
-- For role creation/editing, permissionChanges may describe permissions to enable/disable. Role edits may also use name/color/hoist/mentionable.
-- Role color should be emitted as a CSS hex string in color when requested; preserve role name if it is not being changed. Convert descriptive colors such as "whiteish-yellow", "pale yellow", "cream", "gold", etc. to a reasonable 6-digit hex color.
-- Channel permission changes may target a role mention/name, a member mention/name, or @everyone. Never invent an entity.
+- For role creation, permissionChanges may describe permissions to enable.
 - If the user asks to compare the server with a snapshot, use server_analyze and explainable fields only; do not invent data.
 - Never output code, markdown, explanations, or IDs.
 USER REQUEST: ${String(prompt||'').slice(0,3000)}`;
@@ -276,7 +255,8 @@ async function conversationalReplyDM({message,prompt}) {
   const status=getAIStatus();
   if(!status.enabled || !status.configured) throw new Error('GEMINI_API_KEY is missing from the environment.');
   const cleaned=cleanText(prompt);
-  if(CREATOR_ID && message.author.id!==CREATOR_ID) return null;
+  const ownerId=String(process.env.JARVIS_OWNER_ID||'797626962494488636').trim();
+  if(ownerId && message.author.id!==ownerId) return null;
   const result=await generateWithFallback({guild:null,member:null,history:[],prompt:cleaned,mode:'classic',context:'DIRECT MESSAGE WITH JARVIS. The user is replying directly to JARVIS, so do not require the word "JARVIS" and do not explain command syntax. Respond naturally and concisely.',isMaster:true});
   return result.text;
 }
